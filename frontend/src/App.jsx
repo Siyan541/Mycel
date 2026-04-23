@@ -51,6 +51,7 @@ export default function App() {
   var _mapId = useState(null), mapId = _mapId[0], setMapId = _mapId[1];
   var _maps = useState([]), maps = _maps[0], setMaps = _maps[1];
   var _cmaps = useState([]), communityMaps = _cmaps[0], setCommunityMaps = _cmaps[1];
+  var _cmaps = useState([]), communityMaps = _cmaps[0], setCommunityMaps = _cmaps[1];
   var _upl = useState(false), uploading = _upl[0], setUploading = _upl[1];
   var _prog = useState(null), progress = _prog[0], setProgress = _prog[1];
   var _coll = useState(new Set()), collapsed = _coll[0], setCollapsed = _coll[1];
@@ -80,7 +81,6 @@ export default function App() {
   useEffect(function() {
     if (view === "library") getMaps().then(function(d) { setMaps(d.maps || []); }).catch(function(){});
     if (view === "community") loadCommunity("all");
-    // original:().then(function(d) { setMaps(d.maps || []); }).catch(function(){});
   }, [view]);
 
   // Keyboard shortcuts
@@ -162,6 +162,15 @@ export default function App() {
         setTimeout(function() { fit(laid); }, 80);
       }
     });
+  };
+
+  var loadCommunity = function(domain) {
+    var apiUrl = 'http://localhost:8000';
+    var endpoint = apiUrl + '/api/community';
+    if (domain && domain !== 'all') endpoint += '?domain=' + domain;
+    fetch(endpoint).then(function(r) { return r.json(); })
+      .then(function(d) { setCommunityMaps(d.maps || []); })
+      .catch(function() { setCommunityMaps([]); });
   };
 
   var handleImageUpload = useCallback(function(nodeId, file) {

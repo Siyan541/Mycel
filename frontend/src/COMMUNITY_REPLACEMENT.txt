@@ -1,0 +1,48 @@
+    // COMMUNITY — paste this to replace your current community view
+    view === 'community' && React.createElement("div", { style: { flex: 1, padding: 24, overflowY: "auto", background: P.bg } },
+      React.createElement("h2", { style: { fontSize: 18, fontWeight: 600, marginBottom: 16, color: P.text } }, "Community Maps"),
+      // Domain filter
+      React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" } },
+        ["all", "general", "mathematics", "physics", "cs", "biology", "chemistry", "history"].map(function(d) {
+          return React.createElement("button", {
+            key: d,
+            onClick: function() { setCommDomain(d); loadCommunity(d); },
+            style: {
+              padding: "6px 16px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
+              background: commDomain === d ? "rgba(162,155,254,0.15)" : "transparent",
+              border: commDomain === d ? "1px solid rgba(162,155,254,0.3)" : "1px solid " + P.border,
+              color: commDomain === d ? "#A29BFE" : P.dim,
+            }
+          }, d.charAt(0).toUpperCase() + d.slice(1));
+        })
+      ),
+      // Cards
+      communityMaps.length === 0
+        ? React.createElement("div", { style: { textAlign: "center", padding: 40, color: P.dim } },
+            "No community maps yet. Confirm and share your maps to populate this feed.")
+        : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 12 } },
+            communityMaps.map(function(m) {
+              return React.createElement("div", { key: m.id, style: { padding: 18, background: P.surface, border: "1px solid " + P.border, borderRadius: 12 } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+                  React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: P.text, flex: 1 } }, m.title),
+                  React.createElement("span", {
+                    style: { fontSize: 10, padding: "3px 10px", borderRadius: 10, background: "rgba(162,155,254,0.15)", color: "#A29BFE" }
+                  }, m.domain || 'general')
+                ),
+                m.description && React.createElement("div", { style: { fontSize: 12, color: P.muted, marginBottom: 8, lineHeight: 1.4 } }, m.description),
+                React.createElement("div", { style: { fontSize: 11, color: P.dim, marginBottom: 10 } },
+                  "by " + (m.user_id || 'anonymous') + " · " + (m.created_at ? m.created_at.split('T')[0] : '')),
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                  React.createElement("button", {
+                    onClick: function() { upvoteCommunityMap(m.id).then(function() { loadCommunity(commDomain); }); },
+                    style: { padding: "6px 14px", background: "rgba(253,203,110,0.1)", border: "1px solid rgba(253,203,110,0.25)", borderRadius: 6, color: "#FDCB6E", fontSize: 12, cursor: "pointer", fontWeight: 500 }
+                  }, "↑ " + (m.upvotes || 0)),
+                  React.createElement("button", {
+                    onClick: function() { loadMap(m.map_id); },
+                    style: { flex: 1, padding: "6px 0", background: "rgba(94,236,213,0.1)", border: "1px solid rgba(94,236,213,0.25)", borderRadius: 6, color: "#5EECD5", fontSize: 12, cursor: "pointer", fontWeight: 500 }
+                  }, "Open Map")
+                )
+              );
+            })
+          )
+    ),

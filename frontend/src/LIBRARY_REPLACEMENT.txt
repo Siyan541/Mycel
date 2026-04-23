@@ -1,0 +1,106 @@
+    // LIBRARY — paste this to replace your current library view
+    view === 'library' && React.createElement("div", { style: { flex: 1, padding: 24, overflowY: "auto", background: P.bg } },
+      React.createElement("h2", { style: { fontSize: 18, fontWeight: 600, marginBottom: 16, color: P.text } }, "Library"),
+      maps.length === 0
+        ? React.createElement("div", { style: { textAlign: "center", padding: 40, color: P.dim } }, "No maps yet. Upload a PDF to create one.")
+        : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 12 } },
+            maps.map(function(m) {
+              return React.createElement("div", { key: m.id, style: { padding: 18, background: P.surface, border: "1px solid " + P.border, borderRadius: 12, cursor: "pointer" } },
+                // Title + status
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
+                  React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: P.text, flex: 1 } }, m.title || m.filename),
+                  React.createElement("span", {
+                    style: {
+                      fontSize: 10, padding: "3px 10px", borderRadius: 10, fontWeight: 500,
+                      background: m.status === 'confirmed' ? 'rgba(81,207,102,0.15)' : 'rgba(90,100,120,0.2)',
+                      color: m.status === 'confirmed' ? '#51CF66' : P.dim,
+                    }
+                  }, m.status === 'confirmed' ? 'Confirmed' : 'Draft')
+                ),
+                // Date
+                React.createElement("div", { style: { fontSize: 11, color: P.dim, marginBottom: 12 } },
+                  m.created_at ? m.created_at.split('T')[0] : ''),
+                // Action buttons
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                  // Open
+                  React.createElement("button", {
+                    onClick: function(e) { e.stopPropagation(); loadMap(m.id); },
+                    style: { flex: 1, padding: "7px 0", background: "rgba(162,155,254,0.1)", border: "1px solid rgba(162,155,254,0.25)", borderRadius: 6, color: "#A29BFE", fontSize: 12, fontWeight: 500, cursor: "pointer" }
+                  }, "Open"),
+                  // Confirm (if draft)
+                  m.status !== 'confirmed' && React.createElement("button", {
+                    onClick: function(e) {
+                      e.stopPropagation();
+                      confirmMap(m.id).then(function() { getMaps().then(function(d) { setMaps(d.maps || []); }); });
+                    },
+                    style: { flex: 1, padding: "7px 0", background: "rgba(81,207,102,0.1)", border: "1px solid rgba(81,207,102,0.25)", borderRadius: 6, color: "#51CF66", fontSize: 12, fontWeight: 500, cursor: "pointer" }
+                  }, "Confirm"),
+                  // Share (if confirmed) — opens share modal
+                  m.status === 'confirmed' && React.createElement("button", {
+                    onClick: function(e) {
+                      e.stopPropagation();
+                      setShareModal({ id: m.id, title: m.title || m.filename });
+                    },
+                    style: { flex: 1, padding: "7px 0", background: "rgba(162,155,254,0.1)", border: "1px solid rgba(162,155,254,0.25)", borderRadius: 6, color: "#A29BFE", fontSize: 12, fontWeight: 500, cursor: "pointer" }
+                  }, "Share"),
+                  // Delete
+                  React.createElement("button", {
+                    onClick: function(e) {
+                      e.stopPropagation();
+                      if (confirm('Delete "' + (m.title || m.filename) + '"?')) {
+                        deleteMap(m.id).then(function() { getMaps().then(function(d) { setMaps(d.maps || []); }); });
+                      }
+                    },
+                    style: { padding: "7px 12px", background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.25)", borderRadius: 6, color: "#FF6B6B", fontSize: 12, cursor: "pointer" }
+                  }, "✕")
+                )
+              );
+            })
+          ),
+      // Share Modal overlay
+      shareModal && React.createElement("div", {
+        style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 },
+        onClick: function() { setShareModal(null); }
+      },
+        React.createElement("div", {
+          onClick: function(e) { e.stopPropagation(); },
+          style: { width: 360, background: P.surface, border: "1px solid " + P.border, borderRadius: 16, padding: 24 }
+        },
+          React.createElement("h3", { style: { fontSize: 16, fontWeight: 600, marginBottom: 12, color: P.text } }, "Share to Community"),
+          React.createElement("div", { style: { fontSize: 13, color: P.muted, marginBottom: 16 } }, 'Share "' + shareModal.title + '" with the community?'),
+          // Domain picker
+          React.createElement("div", { style: { marginBottom: 16 } },
+            React.createElement("div", { style: { fontSize: 12, color: P.dim, marginBottom: 6 } }, "Domain:"),
+            React.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+              ["general", "mathematics", "physics", "cs", "biology", "chemistry", "history"].map(function(d) {
+                return React.createElement("button", {
+                  key: d,
+                  onClick: function() { setShareDomain(d); },
+                  style: {
+                    padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: "pointer",
+                    background: shareDomain === d ? "rgba(162,155,254,0.2)" : "transparent",
+                    border: shareDomain === d ? "1px solid rgba(162,155,254,0.4)" : "1px solid " + P.border,
+                    color: shareDomain === d ? "#A29BFE" : P.dim,
+                  }
+                }, d);
+              })
+            )
+          ),
+          // Action buttons
+          React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", {
+              onClick: function() {
+                shareMap(shareModal.id, shareModal.title, '', shareDomain)
+                  .then(function() { setShareModal(null); alert('Shared successfully!'); })
+                  .catch(function() { alert('Share failed'); });
+              },
+              style: { flex: 1, padding: "10px 0", background: "rgba(162,155,254,0.15)", border: "1px solid rgba(162,155,254,0.3)", borderRadius: 8, color: "#A29BFE", fontSize: 13, fontWeight: 600, cursor: "pointer" }
+            }, "Share"),
+            React.createElement("button", {
+              onClick: function() { setShareModal(null); },
+              style: { flex: 1, padding: "10px 0", background: "transparent", border: "1px solid " + P.border, borderRadius: 8, color: P.dim, fontSize: 13, cursor: "pointer" }
+            }, "Cancel")
+          )
+        )
+      )
+    ),
