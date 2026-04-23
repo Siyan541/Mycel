@@ -1,0 +1,718 @@
+import React, { useState, useMemo, useCallback, useRef, useEffect, useReducer } from "react";
+import { uploadPDF, getMaps, getMap, deleteMap, submitCorrection, confirmMap, shareMap } from "./api";
+import { PALETTES, edgeCat, typeColor, ARROW_CATS } from "./utils/theme";
+import { organicLayout, edgePath, sPath, wrap, nSize, convexHull, hullPath, getNeighbors } from "./utils/layout";
+import Palace3DView from './palace3d/Palace3DView.jsx';
+
+// ── Undo/Redo ────────────────────────────────────────────────────────────
+function histReducer(state, action) {
+  switch (action.type) {
+    case 'SET': {
+      var past = state.past.concat([state.present]);
+      if (past.length > 40) past = past.slice(past.length - 40);
+      return { past: past, present: action.data, future: [] };
+    }
+    case 'UNDO': {
+      if (!state.past.length) return state;
+      var prev = state.past[state.past.length - 1];
+      var future = [state.present].concat(state.future);
+      if (future.length > 40) future = future.slice(0, 40);
+      return { past: state.past.slice(0, -1), present: prev, future: future };
+    }
+    case 'REDO': {
+      if (!state.future.length) return state;
+      var next = state.future[0];
+      return { past: state.past.concat([state.present]), present: next, future: state.future.slice(1) };
+    }
+    case 'INIT':
+      return { past: [], present: action.data, future: [] };
+    default: return state;
+  }
+}
+
+export default function App() {
+  var initData = { nodes: [], edges: [], drawings: [] };
+  var _hr = useReducer(histReducer, { past: [], present: initData, future: [] });
+  var hist = _hr[0], dispatch = _hr[1];
+  var data = hist.present;
+  var nodes = data.nodes, edges = data.edges, drawings = data.drawings || [];
+
+  var setData = useCallback(function(fn) {
+    var next = typeof fn === 'function' ? fn(hist.present) : fn;
+    dispatch({ type: 'SET', data: next });
+  }, [hist.present]);
+  var undo = useCallback(function() { dispatch({ type: 'UNDO' }); }, []);
+  var redo = useCallback(function() { dispatch({ type: 'REDO' }); }, []);
+
+  var _palk = useState("aurora"), palKey = _palk[0], setPalKey = _palk[1];
+  var _view = useState("home"), view = _view[0], setView = _view[1];
+  var _sel = useState(null), sel = _sel[0], setSel = _sel[1];
+  var _hov = useState(null), hov = _hov[0], setHov = _hov[1];
+  var _mapId = useState(null), mapId = _mapId[0], setMapId = _mapId[1];
+  var _maps = useState([]), maps = _maps[0], setMaps = _maps[1];
+  var _cmaps = useState([]), communityMaps = _cmaps[0], setCommunityMaps = _cmaps[1];
+  var _upl = useState(false), uploading = _upl[0], setUploading = _upl[1];
+  var _prog = useState(null), progress = _prog[0], setProgress = _prog[1];
+  var _coll = useState(new Set()), collapsed = _coll[0], setCollapsed = _coll[1];
+  var _ef = useState(null), editField = _ef[0], setEditField = _ef[1];
+  var _ev = useState(''), editVal = _ev[0], setEditVal = _ev[1];
+  var _cam = useState({ x: 0, y: 0, z: 0.75 }), cam = _cam[0], setCam = _cam[1];
+  var _drag = useState(null), drag = _drag[0], setDrag = _drag[1];
+  var _tool = useState('select'), tool = _tool[0], setTool = _tool[1];
+  var _dp = useState(null), drawPath = _dp[0], setDrawPath = _dp[1];
+  var _dc = useState('#A29BFE'), drawColor = _dc[0], setDrawColor = _dc[1];
+  var containerRef = useRef(null);
+  var fileRef = useRef(null);
+  var P = PALETTES[palKey];
+
+  // WebSocket
+  useEffect(function() {
+    var ws;
+    try {
+      var url = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:8000';
+      url = url.replace('http', 'ws');
+      ws = new WebSocket(url + '/ws/progress');
+      ws.onmessage = function(e) { try { setProgress(JSON.parse(e.data)); } catch(ex) {} };
+    } catch(ex) {}
+    return function() { if (ws) ws.close(); };
+  }, []);
+
+  useEffect(function() {
+    if (view === "library") getMaps().then(function(d) { setMaps(d.maps || []); }).catch(function(){});
+    if (view === "community") loadCommunity("all");
+    // original:().then(function(d) { setMaps(d.maps || []); }).catch(function(){});
+  }, [view]);
+
+  // Keyboard shortcuts
+  useEffect(function() {
+    var h = function(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+      if (e.key === 'v') setTool('select');
+      if (e.key === 'd') setTool('draw');
+      if (e.key === 'e') setTool('eraser');
+      if (e.key === 'Escape') { setSel(null); setTool('select'); }
+      if (e.key === 'Delete' && sel) {
+        setData(function(dd) {
+          return { nodes: dd.nodes.filter(function(n) { return n.id !== sel; }),
+                   edges: dd.edges.filter(function(ed) { return ed.source !== sel && ed.target !== sel; }),
+                   drawings: dd.drawings };
+        });
+        setSel(null);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return function() { window.removeEventListener('keydown', h); };
+  }, [undo, redo, sel, setData]);
+
+  var fit = useCallback(function(nl) {
+    if (!containerRef.current || !nl || !nl.length) return;
+    var rc = containerRef.current.getBoundingClientRect();
+    var ax = Infinity, ay = Infinity, bx = -Infinity, by = -Infinity;
+    for (var i = 0; i < nl.length; i++) {
+      var r = nl[i].r || 60;
+      ax = Math.min(ax, nl[i].x - r); ay = Math.min(ay, nl[i].y - r);
+      bx = Math.max(bx, nl[i].x + r); by = Math.max(by, nl[i].y + r);
+    }
+    var gw = bx - ax + 120, gh = by - ay + 120;
+    var z = Math.min(rc.width / gw, rc.height / gh, 1.4);
+    setCam({ x: -(ax - 60) * z + (rc.width - gw * z) / 2, y: -(ay - 60) * z + (rc.height - gh * z) / 2, z: z });
+  }, []);
+
+  var handleUpload = function(file) {
+    var ext = file.name.split('.').pop().toLowerCase(); var allowed = ['pdf','docx','txt','md','epub','tex','rst']; if (!file || allowed.indexOf(ext) < 0) return;
+    setUploading(true);
+    setProgress({ stage: 'uploading', progress: 0, message: 'Uploading...' });
+    uploadPDF(file).then(function(r) {
+      if (r.nodes) {
+        var edgesN = r.edges.map(function(e) {
+          return Object.assign({}, e, { source: e.source_id || e.source, target: e.target_id || e.target });
+        });
+        var laid = organicLayout(r.nodes, edgesN);
+        dispatch({ type: 'INIT', data: { nodes: laid, edges: edgesN, drawings: [] } });
+        setMapId(r.map_id); setView('graph'); setCollapsed(new Set());
+        setTimeout(function() { fit(laid); }, 80);
+        setProgress({ stage: 'done', progress: 1, message: r.node_count + ' concepts, ' + r.edge_count + ' relations' });
+      }
+      setUploading(false);
+    }).catch(function(e) {
+      setProgress({ stage: 'error', progress: 0, message: e.message || 'Upload failed' });
+      setUploading(false);
+    });
+  };
+
+  var loadCommunity = function(domain) {
+    var url = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:8000";
+    var endpoint = url + "/api/community";
+    if (domain && domain !== "all") endpoint += "?domain=" + domain;
+    fetch(endpoint).then(function(r) { return r.json(); })
+      .then(function(d) { setCommunityMaps(d.maps || []); })
+      .catch(function() { setCommunityMaps([]); });
+  };
+  var loadMap = function(id) {
+    getMap(id).then(function(r) {
+      if (r.nodes) {
+        var edgesN = r.edges.map(function(e) {
+          return Object.assign({}, e, { source: e.source_id || e.source, target: e.target_id || e.target });
+        });
+        var laid = organicLayout(r.nodes, edgesN);
+        dispatch({ type: 'INIT', data: { nodes: laid, edges: edgesN, drawings: [] } });
+        setMapId(id); setView('graph'); setCollapsed(new Set());
+        setTimeout(function() { fit(laid); }, 80);
+      }
+    });
+  };
+
+  var handleImageUpload = useCallback(function(nodeId, file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      setData(function(dd) {
+        return Object.assign({}, dd, {
+          nodes: dd.nodes.map(function(n) {
+            if (n.id !== nodeId) return n;
+            var updated = Object.assign({}, n, { image: ev.target.result });
+            return Object.assign(updated, nSize(updated));
+          })
+        });
+      });
+    };
+    reader.readAsDataURL(file);
+  }, [setData]);
+
+  // Derived
+  var nm = useMemo(function() { var m = {}; nodes.forEach(function(n) { m[n.id] = n; }); return m; }, [nodes]);
+  var allLabels = useMemo(function() { return nodes.map(function(n) { return n.label; }); }, [nodes]);
+  var ch = useMemo(function() { var c = {}; edges.forEach(function(e) { if (!c[e.source]) c[e.source] = []; c[e.source].push(e.target); }); return c; }, [edges]);
+  var deg = useMemo(function() { var d = {}; edges.forEach(function(e) { d[e.source] = (d[e.source] || 0) + 1; d[e.target] = (d[e.target] || 0) + 1; }); return d; }, [edges]);
+
+  var visIds = useMemo(function() {
+    if (!collapsed.size) return new Set(nodes.map(function(n) { return n.id; }));
+    var hidden = new Set();
+    collapsed.forEach(function(cid) {
+      var q = (ch[cid] || []).slice();
+      while (q.length) { var id = q.shift(); if (!hidden.has(id)) { hidden.add(id); if (!collapsed.has(id)) (ch[id] || []).forEach(function(c) { q.push(c); }); } }
+    });
+    return new Set(nodes.filter(function(n) { return !hidden.has(n.id); }).map(function(n) { return n.id; }));
+  }, [nodes, collapsed, ch]);
+
+  var vn = useMemo(function() { return nodes.filter(function(n) { return visIds.has(n.id); }); }, [nodes, visIds]);
+  var ve = useMemo(function() { return edges.filter(function(e) { return visIds.has(e.source) && visIds.has(e.target); }); }, [edges, visIds]);
+
+  var hulls = useMemo(function() {
+    var g = {};
+    vn.forEach(function(n) { var c = n.cluster || 'x'; if (!g[c]) g[c] = []; g[c].push(n); });
+    return Object.keys(g).filter(function(k) { return g[k].length >= 2; }).map(function(k) {
+      return { key: k, d: hullPath(convexHull(g[k].map(function(n) { return { x: n.x, y: n.y }; })), 45) };
+    });
+  }, [vn]);
+
+  var ep = useMemo(function() {
+    var p = {};
+    ve.forEach(function(e) {
+      var k = [e.source, e.target].sort().join('|');
+      if (!p[k]) p[k] = [];
+      p[k].push(Object.assign({}, e, { idx: p[k].length }));
+    });
+    return p;
+  }, [ve]);
+
+  var s2w = useCallback(function(sx, sy) { return { x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z }; }, [cam]);
+  var w2s = useCallback(function(wx, wy) { return { x: wx * cam.z + cam.x, y: wy * cam.z + cam.y }; }, [cam]);
+
+  var findTerms = useCallback(function(desc, skip) {
+    if (!desc) return [];
+    var f = [];
+    allLabels.forEach(function(lb) {
+      if (lb === skip || lb.length < 3) return;
+      if (desc.toLowerCase().indexOf(lb.toLowerCase()) >= 0) f.push(lb);
+    });
+    return f.slice(0, 4);
+  }, [allLabels]);
+
+  // ── Pointer ────────────────────────────────────────────────────────────
+  var onDown = useCallback(function(e) {
+    if (e.button !== 0) return;
+    var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+    if (!rc) return;
+    var sx = e.clientX - rc.left, sy = e.clientY - rc.top, w = s2w(sx, sy);
+
+    if (tool === 'draw') {
+      setDrawPath({ color: drawColor, points: [{ x: w.x, y: w.y }], width: 2 });
+      e.preventDefault(); return;
+    }
+    if (tool === 'eraser') {
+      setData(function(dd) {
+        return Object.assign({}, dd, {
+          drawings: dd.drawings.filter(function(dr) {
+            return !dr.points.some(function(pt) { return Math.abs(pt.x - w.x) < 20 && Math.abs(pt.y - w.y) < 20; });
+          })
+        });
+      });
+      return;
+    }
+
+    var hit = null;
+    for (var i = 0; i < vn.length; i++) {
+      var dx = w.x - vn[i].x, dy = w.y - vn[i].y;
+      if (dx * dx + dy * dy < vn[i].r * vn[i].r) { hit = vn[i]; break; }
+    }
+    if (hit) {
+      var nbrs = getNeighbors(hit.id, edges);
+      var offsets = {};
+      Object.keys(nbrs).forEach(function(id) {
+        offsets[id] = { dx: (nm[id] ? nm[id].x : 0) - hit.x, dy: (nm[id] ? nm[id].y : 0) - hit.y };
+      });
+      setDrag({ t: 'c', nid: hit.id, nbrs: nbrs, sx: sx, sy: sy, ox: hit.x, oy: hit.y, off: offsets });
+      e.preventDefault();
+    } else {
+      setDrag({ t: 'p', sx: sx, sy: sy, cx: cam.x, cy: cam.y });
+    }
+  }, [vn, s2w, cam, nm, edges, tool, drawColor, setData]);
+
+  var onMove = useCallback(function(e) {
+    var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+    if (!rc) return;
+    var sx = e.clientX - rc.left, sy = e.clientY - rc.top;
+
+    if (drawPath) {
+      var w = s2w(sx, sy);
+      setDrawPath(function(p) { return Object.assign({}, p, { points: p.points.concat([{ x: w.x, y: w.y }]) }); });
+      return;
+    }
+    if (!drag) {
+      if (tool === 'select') {
+        var w = s2w(sx, sy);
+        var hit = null;
+        for (var i = 0; i < vn.length; i++) {
+          var dx = w.x - vn[i].x, dy = w.y - vn[i].y;
+          if (dx * dx + dy * dy < vn[i].r * vn[i].r) { hit = vn[i]; break; }
+        }
+        setHov(hit ? hit.id : null);
+      }
+      return;
+    }
+    var dx = sx - drag.sx, dy = sy - drag.sy;
+    if (drag.t === 'p') {
+      setCam(function(c) { return { x: drag.cx + dx, y: drag.cy + dy, z: c.z }; });
+    } else if (drag.t === 'c') {
+      var nx = drag.ox + dx / cam.z, ny = drag.oy + dy / cam.z;
+      setData(function(dd) {
+        return Object.assign({}, dd, {
+          nodes: dd.nodes.map(function(n) {
+            if (n.id === drag.nid) return Object.assign({}, n, { x: nx, y: ny });
+            if (drag.off[n.id]) return Object.assign({}, n, { x: nx + drag.off[n.id].dx, y: ny + drag.off[n.id].dy });
+            return n;
+          })
+        });
+      });
+    }
+  }, [drag, cam, vn, s2w, drawPath, tool, setData]);
+
+  var onUp = useCallback(function() {
+    if (drawPath && drawPath.points.length > 2) {
+      setData(function(dd) { return Object.assign({}, dd, { drawings: dd.drawings.concat([drawPath]) }); });
+    }
+    setDrawPath(null);
+    setDrag(null);
+  }, [drawPath, setData]);
+
+  var onWheel = useCallback(function(e) {
+    e.preventDefault();
+    var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+    if (!rc) return;
+    var sx = e.clientX - rc.left, sy = e.clientY - rc.top;
+    var f = e.deltaY > 0 ? 0.9 : 1.1;
+    setCam(function(c) {
+      var nz = Math.max(0.15, Math.min(5, c.z * f));
+      return { x: sx - (sx - c.x) * (nz / c.z), y: sy - (sy - c.y) * (nz / c.z), z: nz };
+    });
+  }, []);
+
+  var onDbl = useCallback(function(e) {
+    var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+    if (!rc) return;
+    var w = s2w(e.clientX - rc.left, e.clientY - rc.top);
+    var hit = null;
+    for (var i = 0; i < vn.length; i++) {
+      var dx = w.x - vn[i].x, dy = w.y - vn[i].y;
+      if (dx * dx + dy * dy < vn[i].r * vn[i].r) { hit = vn[i]; break; }
+    }
+    if (hit) {
+      setCollapsed(function(prev) {
+        var next = new Set(prev);
+        if (next.has(hit.id)) next.delete(hit.id); else next.add(hit.id);
+        return next;
+      });
+    } else {
+      fit(nodes);
+    }
+  }, [vn, s2w, fit, nodes]);
+
+  var selNode = sel ? nm[sel] : null;
+  var connE = selNode ? ve.filter(function(e) { return e.source === sel || e.target === sel; }) : [];
+  var showDesc = cam.z > 0.45;
+  var showTerms = cam.z > 0.55;
+  var showELabel = cam.z > 0.65;
+
+  var stages = { uploading: "Uploading", parsing: "Parsing", chunking: "Splitting", pattern_extraction: "Scanning", concept_extraction: "AI extracting", clustering: "Clustering", relation_extraction: "Connecting", validation: "Validating", done: "Complete" };
+
+  var cursorStyle = tool === 'draw' ? 'crosshair' : tool === 'eraser' ? 'cell' : (drag && drag.t === 'p') ? 'grabbing' : 'grab';
+
+  // ── RENDER ──────────────────────────────────────────────────────────────
+  return React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: P.bg, color: P.text, fontFamily: "'Inter',system-ui,sans-serif" } },
+    
+    // HEADER
+    React.createElement("header", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 18px", background: P.surface, borderBottom: "1px solid " + P.border, flexShrink: 0, gap: 8 } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+        React.createElement("span", { onClick: function() { setView('home'); }, style: { fontSize: 15, fontWeight: 700, cursor: 'pointer', background: "linear-gradient(135deg,#6C5CE7,#00B8A9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "✦ Mycel"),
+        React.createElement("nav", { style: { display: "flex", gap: 3 } },
+          ["home", "graph", "palace", "library", "community"].map(function(k) {
+            return React.createElement("button", { key: k, onClick: function() { setView(k); }, style: { padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", background: view === k ? P.bg : "transparent", color: view === k ? P.text : P.dim, fontSize: 13, fontWeight: 500 } }, k.charAt(0).toUpperCase() + k.slice(1));
+          })
+        )
+      ),
+      view === 'graph' && React.createElement("div", { style: { display: "flex", gap: 2, alignItems: "center" } },
+        React.createElement("span", { style: { fontSize: 12, color: P.dim, marginRight: 8 } }, vn.length + " nodes · " + ve.length + " edges"),
+        [{ k: 'select', l: '↖' }, { k: 'draw', l: '✎' }, { k: 'eraser', l: '⌫' }].map(function(b) {
+          return React.createElement("button", { key: b.k, onClick: function() { setTool(b.k); }, style: { padding: "6px 10px", borderRadius: 6, border: tool === b.k ? "1px solid " + P.text + "30" : "1px solid transparent", background: tool === b.k ? P.bg : "transparent", color: tool === b.k ? P.text : P.dim, fontSize: 14, cursor: "pointer" } }, b.l);
+        }),
+        tool === 'draw' && ["#A29BFE", "#5EECD5", "#F0A08A", "#FDCB6E", "#FD79A8", "#E8ECF4"].map(function(c) {
+          return React.createElement("div", { key: c, onClick: function() { setDrawColor(c); }, style: { width: 18, height: 18, borderRadius: "50%", background: c, cursor: "pointer", outline: drawColor === c ? "2px solid #fff" : "none", outlineOffset: 1, marginLeft: 2 } });
+        }),
+        React.createElement("div", { style: { width: 1, height: 14, background: P.border, margin: "0 4px" } }),
+        React.createElement("button", { onClick: undo, disabled: !hist.past.length, style: { padding: "3px 7px", borderRadius: 4, border: "1px solid " + P.border, background: "transparent", color: hist.past.length ? P.text : P.dim, fontSize: 13, cursor: "pointer", opacity: hist.past.length ? 1 : 0.4 } }, "↩"),
+        React.createElement("button", { onClick: redo, disabled: !hist.future.length, style: { padding: "3px 7px", borderRadius: 4, border: "1px solid " + P.border, background: "transparent", color: hist.future.length ? P.text : P.dim, fontSize: 13, cursor: "pointer", opacity: hist.future.length ? 1 : 0.4 } }, "↪")
+      )
+    ),
+
+    // HOME
+    view === 'home' && React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: "40px 20px" } },
+      React.createElement("h1", { style: { fontSize: 26, fontWeight: 700, background: "linear-gradient(135deg,#6C5CE7,#00B8A9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "Mycel"),
+      React.createElement("p", { style: { fontSize: 13, color: P.muted, lineHeight: 1.7, maxWidth: 420, textAlign: "center" } }, "Upload a textbook chapter. Watch concepts grow like mycelia."),
+      React.createElement("div", {
+        onClick: function() { if (!uploading) { var el = document.getElementById('fi'); if (el) el.click(); } },
+        style: { width: "100%", maxWidth: 460, border: "2px dashed " + P.border, borderRadius: 14, padding: "28px 20px", textAlign: "center", cursor: uploading ? "wait" : "pointer" }
+      },
+        React.createElement("input", { id: "fi", type: "file", accept: ".pdf,.docx,.txt,.md,.epub,.tex,.rst", style: { display: "none" }, disabled: uploading, onChange: function(e) { handleUpload(e.target.files ? e.target.files[0] : null); } }),
+        progress && progress.stage !== 'done'
+          ? React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 13, fontWeight: 600, marginBottom: 4 } }, stages[progress.stage] || 'Processing...'),
+              React.createElement("div", { style: { fontSize: 11, color: P.dim, marginBottom: 8 } }, progress.message),
+              React.createElement("div", { style: { height: 5, background: P.bg, borderRadius: 3, overflow: "hidden", maxWidth: 260, margin: "0 auto" } },
+                React.createElement("div", { style: { height: "100%", width: Math.max((progress.progress || 0) * 100, 3) + "%", background: "linear-gradient(90deg,#6C5CE7,#00B8A9)", borderRadius: 3 } })
+              )
+            )
+          : React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 16, fontWeight: 500, marginBottom: 6 } }, "Drop a PDF or click to upload"),
+              React.createElement("div", { style: { fontSize: 11, color: P.dim } }, "10-50 page chapters work best")
+            )
+      ),
+      React.createElement("button", { onClick: function() { setView('library'); }, style: { padding: "7px 18px", background: "transparent", border: "1px solid " + P.border, borderRadius: 8, color: P.dim, fontSize: 12, cursor: "pointer" } }, "Browse library")
+    ),
+
+    // COMMUNITY
+    view === 'community' && React.createElement("div", {
+      style: { flex: 1, padding: 24, overflowY: "auto" }
+    },
+      React.createElement("h2", null, "Community Maps"),
+      // Domain filter buttons
+      React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 16 } },
+        ["all", "mathematics", "physics", "cs", "biology"].map(function(d) {
+          return React.createElement("button", {
+            key: d, onClick: function() { loadCommunity(d); },
+            style: { fontSize: 20, color: P.dim }
+          }, d);
+        })
+      ),
+      // Map cards
+      communityMaps.map(function(m) {
+        return React.createElement("div", { key: m.id, style: { fontSize: 14, color: P.dim } },
+          React.createElement("h3", null, m.title),
+          React.createElement("p", null, m.description),
+          React.createElement("span", null, m.domain),
+          React.createElement("button", {
+            onClick: function() { upvoteCommunityMap(m.id); }
+          }, "↑ " + m.upvotes),
+          React.createElement("button", {
+            onClick: function() { loadMap(m.map_id); }
+          }, "Open")
+        );
+      })
+    ),
+    
+    // LIBRARY
+    view === 'library' && React.createElement("div", { style: { flex: 1, padding: 24, overflowY: "auto" } },
+      React.createElement("h2", { style: { fontSize: 18, fontWeight: 600, marginBottom: 16 } }, "Library"),
+      maps.length === 0
+        ? React.createElement("div", { style: { textAlign: "center", padding: 40, color: P.dim } }, "No maps yet. Upload a PDF to create one.")
+        : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 10 } },
+            maps.map(function(m) {
+              return React.createElement("div", { key: m.id, onClick: function() { loadMap(m.id); }, style: { padding: 18, background: P.surface, border: "1px solid " + P.border, borderRadius: 12, cursor: "pointer" } },
+                // Title
+                React.createElement("div", { style: { fontSize: 14, fontWeight: 600, marginBottom: 3 } }, m.title || m.filename),
+                // Status badge
+                React.createElement("span", {
+                  style: {
+                    fontSize: 11, padding: "3px 10px", borderRadius: 10,
+                    background: m.status === 'confirmed' ? '#51CF6620' : '#5A647820',
+                    color: m.status === 'confirmed' ? '#51CF66' : '#5A6478',
+                  }
+                }, m.status || 'draft'),
+                // Date
+                React.createElement("div", { style: { fontSize: 10, color: P.dim } }, m.created_at ? m.created_at.split('T')[0] : ''),
+                // Actions
+                React.createElement("div", { style: { display: "flex", gap: 4, marginTop: 8 } },
+                // Open
+                React.createElement("button", {
+                  onClick: function() { loadMap(m.id); },
+                  style: { fontSize: 12, color: P.dim}
+                }, "Open"),
+                // Confirm (only if draft)
+                m.status !== 'confirmed' && React.createElement("button", {
+                  onClick: function() {
+                    confirmMap(m.id).then(function() {
+                      // Refresh maps list
+                      getMaps().then(function(d) { setMaps(d.maps || []); });
+                    });
+                  },
+                  style: { fontSize: 12, color: '#51CF66' }
+                }, "✓ Confirm"),
+                // Share (only if confirmed)
+                m.status === 'confirmed' && React.createElement("button", {
+                  onClick: function() {
+                    shareMap(m.id, m.title, '', 'general');
+                  },
+                  style: { fontSize: 12, color: '#A29BFE' }
+                }, "Share"),
+                // Delete
+                React.createElement("button", {
+                  onClick: function() {
+                    if (confirm('Delete "' + m.title + '"?')) {
+                      deleteMap(m.id).then(function() {
+                        getMaps().then(function(d) { setMaps(d.maps || []); });
+                      });
+                    }
+                  },
+                  style: { fontSize: 12, color: '#FF6B6B' }
+                }, "Delete")
+              )
+              );
+            })
+          )
+    ),
+
+    // PALACE VIEW — inside the return, same level as other views
+    view === 'palace' && React.createElement(Palace3DView, {
+      nodes: vn,
+      edges: ve,
+      palette: P,
+      onBack: function() { setView('graph'); }
+    }),
+
+    // GRAPH
+    view === 'graph' && React.createElement("div", {
+      ref: containerRef,
+      style: { flex: 1, position: "relative", overflow: "hidden", cursor: cursorStyle },
+      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerLeave: onUp,
+      onWheel: onWheel, onDoubleClick: onDbl
+    },
+      // Dot grid
+      React.createElement("div", { style: { position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", backgroundImage: "radial-gradient(circle," + P.dot + " 1px,transparent 1px)", backgroundSize: Math.max(16, 26 * cam.z) + "px " + Math.max(16, 26 * cam.z) + "px", backgroundPosition: (cam.x % (26 * cam.z)) + "px " + (cam.y % (26 * cam.z)) + "px" } }),
+
+      // SVG
+      React.createElement("svg", { style: { position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 1, overflow: "visible" } },
+        React.createElement("defs", null,
+          React.createElement("marker", { id: "ah", viewBox: "0 0 12 12", refX: "11", refY: "6", markerWidth: "7", markerHeight: "7", orient: "auto" },
+            React.createElement("path", { d: "M1 2L10 6L1 10", fill: "none", stroke: "context-stroke", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" })
+          )
+        ),
+
+        // Drawings
+        drawings.map(function(dr, i) {
+          if (dr.points.length < 2) return null;
+          var d2 = 'M' + dr.points[0].x + ' ' + dr.points[0].y;
+          for (var j = 1; j < dr.points.length; j++) d2 += 'L' + dr.points[j].x + ' ' + dr.points[j].y;
+          return React.createElement("path", { key: "dr" + i, d: d2, fill: "none", stroke: dr.color, strokeWidth: dr.width / cam.z, opacity: 0.7, strokeLinecap: "round", strokeLinejoin: "round", transform: "translate(" + cam.x + "," + cam.y + ") scale(" + cam.z + ")" });
+        }),
+        drawPath && drawPath.points.length > 1 && (function() {
+          var d2 = 'M' + drawPath.points[0].x + ' ' + drawPath.points[0].y;
+          for (var j = 1; j < drawPath.points.length; j++) d2 += 'L' + drawPath.points[j].x + ' ' + drawPath.points[j].y;
+          return React.createElement("path", { d: d2, fill: "none", stroke: drawPath.color, strokeWidth: drawPath.width / cam.z, opacity: 0.7, strokeLinecap: "round", strokeLinejoin: "round", transform: "translate(" + cam.x + "," + cam.y + ") scale(" + cam.z + ")" });
+        })(),
+
+        // Hulls
+        hulls.map(function(h) { return React.createElement("path", { key: h.key, d: h.d, fill: P.hullFill, stroke: P.hullStroke, strokeWidth: 1, transform: "translate(" + cam.x + "," + cam.y + ") scale(" + cam.z + ")" }); }),
+
+        // Edges
+        Object.keys(ep).map(function(k) { return ep[k]; }).reduce(function(a, b) { return a.concat(b); }, []).map(function(e, i) {
+          var s = nm[e.source], t = nm[e.target];
+          if (!s || !t) return null;
+          var cat = edgeCat(e.relation_type), st = P.edges[cat] || P.edges.custom;
+          var conf = e.confidence || 0.5, thick = st.w * (0.5 + conf * 0.5);
+          var hi = sel === e.source || sel === e.target || hov === e.source || hov === e.target;
+          var path = (cat === 'compositional' || cat === 'pedagogical') ? sPath(s.x, s.y, t.x, t.y) : edgePath(s.x, s.y, t.x, t.y, e.idx, ep[[e.source, e.target].sort().join('|')].length);
+          var tr = "translate(" + cam.x + "," + cam.y + ") scale(" + cam.z + ")";
+          var useArr = ARROW_CATS.has(cat);
+          return React.createElement("g", { key: "e" + i },
+            hi && React.createElement("path", { d: path, fill: "none", stroke: st.color, strokeWidth: thick + 7, opacity: 0.12, transform: tr, strokeLinecap: "round" }),
+            React.createElement("path", { d: path, fill: "none", stroke: st.color, strokeWidth: hi ? thick * 1.5 : thick, strokeDasharray: st.dash, opacity: hi ? 0.9 : 0.55, transform: tr, strokeLinecap: "round", markerEnd: useArr ? "url(#ah)" : "" })
+          );
+        }),
+
+        // Nodes
+        vn.map(function(n) {
+          var t = typeColor(P, n.concept_type);
+          var isSel = sel === n.id, isHov = hov === n.id;
+          var hasCh = (ch[n.id] || []).length > 0, isCol = collapsed.has(n.id);
+          var dl = showDesc ? (n.dl || []) : [];
+          var totalH = (n.lh || 30) + (dl.length ? dl.length * 16 + 10 : 0) + (dl.length ? 10 : 0) + (n.imgH || 0);
+          var sx2 = n.x * cam.z + cam.x, sy2 = n.y * cam.z + cam.y;
+          var terms = showTerms && dl.length > 0 ? findTerms(n.description, n.label) : [];
+          return React.createElement("g", {
+            key: n.id,
+            transform: "translate(" + sx2 + "," + sy2 + ") scale(" + cam.z + ")",
+            style: { cursor: tool === 'select' ? 'pointer' : 'inherit' },
+            onClick: function(ev) { if (tool !== 'select') return; ev.stopPropagation(); setSel(function(p) { return p === n.id ? null : n.id; }); },
+            onPointerDown: function(ev) {
+              if (tool !== 'select') return;
+              ev.stopPropagation();
+              var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+              if (!rc) return;
+              var px = ev.clientX - rc.left, py = ev.clientY - rc.top;
+              var nbrs = getNeighbors(n.id, edges);
+              var offsets = {};
+              Object.keys(nbrs).forEach(function(id) { offsets[id] = { dx: (nm[id] ? nm[id].x : 0) - n.x, dy: (nm[id] ? nm[id].y : 0) - n.y }; });
+              setDrag({ t: 'c', nid: n.id, nbrs: nbrs, sx: px, sy: py, ox: n.x, oy: n.y, off: offsets });
+              ev.preventDefault();
+            }
+          },
+            // Opaque border on SELECT only
+            isSel && React.createElement("rect", { x: -n.w / 2 - 6, y: -totalH / 2 - 6, width: n.w + 12, height: totalH + 12, rx: 14, fill: P.surface, stroke: t.a, strokeWidth: 1.5, opacity: 0.95 }),
+            // Dashed on hover
+            isHov && !isSel && React.createElement("rect", { x: -n.w / 2 - 4, y: -totalH / 2 - 4, width: n.w + 8, height: totalH + 8, rx: 12, fill: "none", stroke: t.a, strokeWidth: 0.8, opacity: 0.3, strokeDasharray: "4 3" }),
+            // Type dot
+            React.createElement("circle", { cx: -n.w / 2 + 6, cy: -totalH / 2 + 6, r: 3.5, fill: t.a, opacity: isSel ? 1 : 0.7 }),
+            // Label
+            (n.ll || []).map(function(line, li) {
+              return React.createElement("text", { key: "l" + li, x: 0, y: -totalH / 2 + 18 + li * 22, textAnchor: "middle", dominantBaseline: "central", fontSize: "14", fontWeight: "600", fill: t.a, fontFamily: "'Inter',sans-serif", style: { pointerEvents: "none" } }, line);
+            }),
+            // Description
+            dl.map(function(line, di) {
+              return React.createElement("text", { key: "d" + di, x: 0, y: -totalH / 2 + (n.lh || 30) + 8 + di * 16, textAnchor: "middle", dominantBaseline: "central", fontSize: "10", fill: t.s, opacity: 0.75, fontFamily: "'Inter',sans-serif", style: { pointerEvents: "none" } }, line);
+            }),
+            // Image
+            n.image && React.createElement("image", { href: n.image, x: -30, y: totalH / 2 - (n.imgH || 70) - 5, width: 60, height: 60, preserveAspectRatio: "xMidYMid slice" }),
+            // Term circles
+            terms.map(function(term, ti) {
+              var tw = term.length * 5.5;
+              var ox = (ti - (terms.length - 1) / 2) * (tw + 16);
+              var oy = totalH / 2 - (n.imgH || 0) + 2;
+              return React.createElement("g", { key: "t" + ti },
+                React.createElement("ellipse", { cx: ox, cy: oy, rx: tw / 2 + 6, ry: 9, fill: "none", stroke: t.a, strokeWidth: 1, opacity: 0.5 }),
+                React.createElement("text", { x: ox, y: oy + 1, textAnchor: "middle", dominantBaseline: "central", fontSize: "8", fill: t.a, opacity: 0.6, fontWeight: "500", fontFamily: "'Inter',sans-serif" }, term)
+              );
+            }),
+            // Collapse badge
+            hasCh && React.createElement("g", {
+              transform: "translate(" + (n.w / 2) + "," + (-totalH / 2) + ")",
+              onClick: function(ev) { ev.stopPropagation(); setCollapsed(function(prev) { var s2 = new Set(prev); if (s2.has(n.id)) s2.delete(n.id); else s2.add(n.id); return s2; }); }
+            },
+              React.createElement("circle", { r: 9, fill: P.surface, stroke: t.a, strokeWidth: 0.8 }),
+              React.createElement("text", { x: 0, y: 1, textAnchor: "middle", dominantBaseline: "central", fontSize: "8", fill: t.a, fontWeight: "600" }, isCol ? '+' + (ch[n.id] || []).length : '−')
+            ),
+            // Degree badge
+            (deg[n.id] || 0) > 2 && !isHov && !isSel && React.createElement("g", { transform: "translate(" + (-n.w / 2) + "," + (totalH / 2) + ")" },
+              React.createElement("circle", { r: 8, fill: P.surface + "CC", stroke: t.a, strokeWidth: 0.4 }),
+              React.createElement("text", { x: 0, y: 1, textAnchor: "middle", dominantBaseline: "central", fontSize: "7", fill: t.a }, deg[n.id])
+            )
+          );
+        })
+      ),
+
+      // Detail card
+      selNode && (function() {
+        var sc = w2s(selNode.x, selNode.y);
+        var t = typeColor(P, selNode.concept_type);
+        var rc = containerRef.current ? containerRef.current.getBoundingClientRect() : { width: 800 };
+        var cW = 260;
+        var cx2 = Math.min(Math.max(10, sc.x + 80), rc.width - cW - 16);
+        var cy2 = Math.max(10, sc.y - 50);
+        return React.createElement("div", { style: { position: "absolute", left: cx2, top: cy2, width: cW, background: P.surface, border: "1px solid " + P.border, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 28px " + P.bg + "AA", zIndex: 20, maxHeight: "55vh", overflowY: "auto" } },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 5, marginBottom: 5 } },
+            React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", background: t.a } }),
+            React.createElement("span", { style: { fontSize: 11, color: t.a, fontWeight: 600, textTransform: "uppercase" } }, selNode.concept_type),
+            React.createElement("span", { style: { fontSize: 11, color: P.dim, marginLeft: "auto" } }, Math.round((selNode.confidence || 0) * 100) + "%"),
+            React.createElement("button", { onClick: function() { setSel(null); }, style: { background: "none", border: "none", color: P.dim, fontSize: 12, cursor: "pointer" } }, "×")
+          ),
+          editField === 'label'
+            ? React.createElement("input", { value: editVal, onChange: function(e) { setEditVal(e.target.value); }, autoFocus: true,
+                onBlur: function() {
+                  setData(function(dd) { return Object.assign({}, dd, { nodes: dd.nodes.map(function(nd) { if (nd.id !== sel) return nd; var up = Object.assign({}, nd, { label: editVal }); return Object.assign(up, nSize(up)); }) }); });
+                  setEditField(null);
+                },
+                onKeyDown: function(e) { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditField(null); },
+                style: { width: "100%", fontSize: 13, fontWeight: 600, background: P.bg, border: "1px solid " + t.a + "50", borderRadius: 6, color: t.a, padding: "3px 6px", marginBottom: 4, fontFamily: "inherit" } })
+            : React.createElement("h3", { onClick: function() { setEditField('label'); setEditVal(selNode.label); }, style: { fontSize: 16, fontWeight: 600, marginBottom: 6, cursor: "text", color: t.a } }, selNode.label),
+          editField === 'desc'
+            ? React.createElement("textarea", { value: editVal, onChange: function(e) { setEditVal(e.target.value); }, rows: 3, autoFocus: true,
+                onBlur: function() {
+                  setData(function(dd) { return Object.assign({}, dd, { nodes: dd.nodes.map(function(nd) { if (nd.id !== sel) return nd; var up = Object.assign({}, nd, { description: editVal }); return Object.assign(up, nSize(up)); }) }); });
+                  setEditField(null);
+                },
+                style: { width: "100%", fontSize: 10, background: P.bg, border: "1px solid " + t.a + "50", borderRadius: 6, color: t.s, padding: "4px 6px", marginBottom: 6, fontFamily: "inherit", lineHeight: 1.4, resize: "vertical" } })
+            : React.createElement("p", { onClick: function() { setEditField('desc'); setEditVal(selNode.description || ''); }, style: { fontSize: 12, color: t.s, lineHeight: 1.5, marginBottom: 8, cursor: "text" } }, selNode.description || "Click to add"),
+          // Image
+          React.createElement("div", { style: { marginBottom: 6 } },
+            selNode.image
+              ? React.createElement("div", { style: { position: "relative" } },
+                  React.createElement("img", { src: selNode.image, alt: "", style: { width: "100%", borderRadius: 8, maxHeight: 100, objectFit: "cover" } }),
+                  React.createElement("button", { onClick: function() { setData(function(dd) { return Object.assign({}, dd, { nodes: dd.nodes.map(function(nd) { if (nd.id !== sel) return nd; var up = Object.assign({}, nd, { image: null }); return Object.assign(up, nSize(up)); }) }); }); }, style: { position: "absolute", top: 3, right: 3, background: "#00000080", border: "none", color: "#fff", borderRadius: 4, padding: "2px 5px", fontSize: 8, cursor: "pointer" } }, "×"))
+              : React.createElement("button", { onClick: function() { if (fileRef.current) fileRef.current.click(); }, style: { width: "100%", padding: 5, background: P.bg, border: "1px dashed " + P.border, borderRadius: 6, color: P.dim, fontSize: 9, cursor: "pointer" } }, "+ Add image")
+          ),
+          React.createElement("input", { ref: fileRef, type: "file", accept: "image/*", style: { display: "none" }, onChange: function(e) { handleImageUpload(sel, e.target.files ? e.target.files[0] : null); } }),
+          // Actions
+          React.createElement("div", { style: { display: "flex", gap: 4, marginBottom: 6 } },
+            React.createElement("button", { onClick: function() { submitCorrection({ map_id: mapId, type: "approve", original: { id: sel } }).catch(function() {}); }, style: { flex: 1, padding: 4, background: "rgba(81,207,102,0.1)", border: "1px solid rgba(81,207,102,0.2)", borderRadius: 5, color: "#51CF66", fontWeight: 600, cursor: "pointer", fontSize: 9 } }, "Correct"),
+            React.createElement("button", { onClick: function() { setData(function(dd) { return { nodes: dd.nodes.filter(function(nd) { return nd.id !== sel; }), edges: dd.edges.filter(function(ed) { return ed.source !== sel && ed.target !== sel; }), drawings: dd.drawings }; }); setSel(null); }, style: { flex: 1, padding: 4, background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.2)", borderRadius: 5, color: "#FF6B6B", fontWeight: 600, cursor: "pointer", fontSize: 9 } }, "Remove")
+          ),
+          // Connections
+          connE.length > 0 && React.createElement("div", null,
+            React.createElement("div", { style: { fontSize: 9, color: P.dim, fontWeight: 600, marginBottom: 3 } }, "Connections (" + connE.length + ")"),
+            connE.map(function(e, i) {
+              var isSrc = e.source === sel, oId = isSrc ? e.target : e.source, o = nm[oId];
+              var cat = edgeCat(e.relation_type), es = P.edges[cat] || P.edges.custom;
+              return React.createElement("div", { key: i, onClick: function() { setSel(oId); }, style: { padding: "4px 6px", background: P.bg, borderRadius: 4, marginBottom: 2, borderLeft: "3px solid " + es.color, cursor: "pointer" } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 9 } },
+                  React.createElement("span", { style: { color: es.color, fontWeight: 600, fontSize: 7, textTransform: "uppercase" } }, (e.relation_type || '').replace(/_/g, ' ')),
+                  React.createElement("span", { style: { color: P.dim } }, (isSrc ? "→ " : "← ") + (o ? o.label : "?"))
+                ),
+                e.justification && React.createElement("div", { style: { fontSize: 8, color: P.dim, marginTop: 1, lineHeight: 1.3 } }, e.justification)
+              );
+            })
+          )
+        );
+      })(),
+
+      // Legend
+      React.createElement("div", { style: { position: "absolute", top: 8, left: 8, background: P.surface + "DD", backdropFilter: "blur(8px)", padding: "10px 14px", borderRadius: 10, border: "1px solid " + P.border, fontSize: 11, zIndex: 5 } },
+        ["theorem", "definition", "principle", "method", "framework", "example"].map(function(t2) {
+          var c = P.types[t2]; if (!c) return null;
+          return React.createElement("div", { key: t2, style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 1 } },
+            React.createElement("div", { style: { width: 8, height: 8, borderRadius: "50%", background: c.a } }),
+            React.createElement("span", { style: { color: c.a } }, t2)
+          );
+        }),
+        React.createElement("div", { style: { marginTop: 3, borderTop: "1px solid " + P.border, paddingTop: 3, color: P.dim, lineHeight: 1.4 } }, "V=select D=draw E=erase", React.createElement("br"), "Ctrl+Z/Y undo/redo", React.createElement("br"), "Drag=family Dbl=fold", React.createElement("br"), "Del=remove Click=border")
+      ),
+
+      // Zoom
+      React.createElement("div", { style: { position: "absolute", bottom: 8, right: 8, display: "flex", gap: 3, zIndex: 5 } },
+        [{ l: "+", f: 1.2 }, { l: "−", f: 1 / 1.2 }, { l: "⊡", f: 0 }].map(function(b) {
+          return React.createElement("button", { key: b.l, onClick: function() { b.f ? setCam(function(c) { return { x: c.x, y: c.y, z: Math.max(0.15, Math.min(5, c.z * b.f)) }; }) : fit(nodes); }, style: { width: 32, height: 32, borderRadius: 8, background: P.surface, border: "1px solid " + P.border, color: P.text, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } }, b.l);
+        })
+      )
+    )
+  );
+}
