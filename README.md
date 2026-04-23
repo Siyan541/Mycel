@@ -7,7 +7,7 @@ Upload a textbook chapter → see concepts and how they connect → edit to trai
 ```bash
 pip install -r backend/requirements.txt
 ollama serve &
-ollama pull llama3.1:8b
+ollama pull qwen2.5:3b
 bash start.sh          # Terminal 1: backend
 cd frontend && npm install && npm run dev  # Terminal 2: frontend
 ```
