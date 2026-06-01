@@ -176,25 +176,30 @@ async def admin_users(key: str = ""):
 
 @app.get("/api/test-llm")
 async def test_llm():
-    """Diagnostic: test what the LLM actually returns."""
-    from backend.app.config import LLM_PROVIDER, LLM_MODEL, TOGETHER_MODEL
-    from backend.app.services.llm import chat
+    import httpx
+    from backend.app.config import LLM_PROVIDER, TOGETHER_API_KEY, TOGETHER_MODEL
     try:
-        test_text = "Photosynthesis is the process by which plants convert sunlight into energy. Chlorophyll in the leaves absorbs light. The light reactions produce ATP. The Calvin cycle fixes carbon dioxide into glucose."
-        result = chat(
-            [{"role": "system", "content": "Extract concepts and relations from this text. Return JSON with concepts and relations arrays. Extract at least 3 concepts and 2 relations."},
-             {"role": "user", "content": test_text}],
-            json_schema={"type": "object", "properties": {"concepts": {"type": "array"}, "relations": {"type": "array"}}, "required": ["concepts", "relations"]},
-            temperature=0.05, max_tokens=2000
-        )
-        return {
-            "provider": LLM_PROVIDER,
-            "model": TOGETHER_MODEL if LLM_PROVIDER == "together" else LLM_MODEL,
-            "raw_response": result,
-            "response_length": len(result)
+        body = {
+            "model": TOGETHER_MODEL,
+            "messages": [
+                {"role": "user", "content": "Extract concepts from: Photosynthesis converts sunlight to energy using chlorophyll. Return JSON with a concepts array."}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 1000
         }
+        with httpx.Client(timeout=60) as c:
+            r = c.post("https://api.together.xyz/v1/chat/completions",
+                headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
+                json=body)
+            return {
+                "status_code": r.status_code,
+                "model_used": TOGETHER_MODEL,
+                "provider": LLM_PROVIDER,
+                "api_key_prefix": TOGETHER_API_KEY[:8] + "..." if TOGETHER_API_KEY else "NOT SET",
+                "response_body": r.text[:1000]
+            }
     except Exception as e:
-        return {"error": str(e), "provider": LLM_PROVIDER}
+        return {"error": str(e)}
     
 @app.post("/api/admin/export")
 async def admin_export(key: str = ""):
