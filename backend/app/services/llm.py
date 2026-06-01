@@ -16,12 +16,14 @@ def _ollama(messages, schema, temp, max_tok):
 
 def _together(messages, schema, temp, max_tok):
     body = {"model": TOGETHER_MODEL, "messages": messages,
-            "temperature": temp, "max_tokens": max_tok}
+            "temperature": 0.05, "max_tokens": 3000, "top_p": 0.9}
     if schema:
         body["response_format"] = {"type": "json_object"}
-    with httpx.Client(timeout=120) as c:
+    with httpx.Client(timeout=180) as c:
         r = c.post("https://api.together.xyz/v1/chat/completions",
             headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
             json=body)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        content = r.json()["choices"][0]["message"]["content"]
+        logger.info(f"Together response: {len(content)} chars")
+        return content
