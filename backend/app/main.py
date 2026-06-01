@@ -101,3 +101,12 @@ async def stats():
 async def export_train(confirmed_only: bool = True):
     n = export_training(confirmed_only=confirmed_only)
     return {"exported": n}
+
+@app.post("/api/maps/{map_id}/unconfirm")
+async def unconfirm(map_id: str):
+    from backend.app.services.storage import _conn
+    from datetime import datetime
+    c = _conn()
+    c.execute("UPDATE maps SET status='draft', updated_at=? WHERE id=?", (datetime.now().isoformat(), map_id))
+    c.commit(); c.close()
+    return {"status": "draft"}
