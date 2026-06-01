@@ -1,99 +1,181 @@
 import os, shutil, logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, UploadFile, File, Query, Body
+from fastapi import FastAPI, UploadFile, File, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from backend.app.config import UPLOAD_DIR
 from backend.app.pipeline.orchestrator import run
 from backend.app.services.storage import (
-    save_map, get_maps, get_map, delete_map, confirm_map,
-    save_correction, get_corrections_stats, get_training_stats, export_training,
-    share_to_community, get_community_maps, upvote_community_map,
+    create_user, login_user, get_user, update_user,
+    add_points, get_activity, get_leaderboard,
+    save_map, get_maps, get_map, delete_map, restore_map,
+    confirm_map, unconfirm_map, map_quality_score,
+    save_correction, share_to_community, unshare,
+    get_community_maps, upvote_community_map,
+    toggle_favorite, get_favorites,
+    get_training_stats, export_training,
+    admin_get_all_maps, admin_get_all_users,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
+
+ADMIN_KEY = os.getenv("ADMIN_KEY", "mycel_admin_2026")
 
 @asynccontextmanager
 async def lifespan(app): yield
 
-app = FastAPI(title="Mycel", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Mycel", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-ALLOWED_EXT = {'.pdf', '.docx', '.txt', '.md', '.markdown', '.rst', '.tex', '.epub'}
+ALLOWED_EXT = {'.pdf','.docx','.txt','.md','.markdown','.rst','.tex','.epub'}
 
+def _uid(x_user_id=None):
+    return x_user_id or "anonymous"
+
+# ── Health ──
 @app.get("/")
 async def root():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "3.0.0"}
 
+# ── Auth ──
+@app.post("/api/auth/register")
+async def register(body: dict = Body(...)):
+    uid, err = create_user(body["username"], body["password"], body.get("display_name"))
+    if err: return JSONResponse({"error": err}, 400)
+    return {"user_id": uid, "username": body["username"]}
+
+@app.post("/api/auth/login")
+async def login(body: dict = Body(...)):
+    user = login_user(body["username"], body["password"])
+    if not user: return JSONResponse({"error": "Invalid credentials"}, 401)
+    return {"user": user}
+
+@app.get("/api/auth/me")
+async def me(x_user_id: str = Header(None)):
+    if not x_user_id: return JSONResponse({"error": "Not logged in"}, 401)
+    user = get_user(x_user_id)
+    if not user: return JSONResponse({"error": "User not found"}, 404)
+    return {"user": user}
+
+@app.put("/api/auth/profile")
+async def update_profile(body: dict = Body(...), x_user_id: str = Header(None)):
+    if not x_user_id: return JSONResponse({"error": "Not logged in"}, 401)
+    update_user(x_user_id, body.get("display_name"), body.get("bio"))
+    return {"status": "updated"}
+
+# ── Activity + Credits ──
+@app.get("/api/activity")
+async def activity(x_user_id: str = Header(None)):
+    if not x_user_id: return {"activity": []}
+    return {"activity": get_activity(x_user_id)}
+
+@app.get("/api/leaderboard")
+async def leaderboard():
+    return {"users": get_leaderboard()}
+
+# ── Maps ──
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), x_user_id: str = Header(None)):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXT:
-        return JSONResponse({"error": f"Unsupported format. Use: {', '.join(ALLOWED_EXT)}"}, 400)
+        return JSONResponse({"error": f"Unsupported. Use: {', '.join(ALLOWED_EXT)}"}, 400)
     fp = UPLOAD_DIR / file.filename
-    with open(fp, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    with open(fp, "wb") as f: shutil.copyfileobj(file.file, f)
     graph = run(str(fp))
-    map_id = save_map(file.filename, graph)
-    return {"status": "success", "map_id": map_id, "document": file.filename,
-            "nodes": [n.model_dump() for n in graph.nodes],
-            "edges": [e.model_dump() for e in graph.edges],
-            "node_count": len(graph.nodes), "edge_count": len(graph.edges)}
+    map_id = save_map(file.filename, graph, _uid(x_user_id))
+    return {"status":"success","map_id":map_id,"document":file.filename,
+            "nodes":[n.model_dump() for n in graph.nodes],
+            "edges":[e.model_dump() for e in graph.edges],
+            "node_count":len(graph.nodes),"edge_count":len(graph.edges)}
 
 @app.get("/api/maps")
-async def list_maps(user_id: str = None):
-    return {"maps": get_maps(user_id)}
+async def list_maps(x_user_id: str = Header(None)):
+    return {"maps": get_maps(_uid(x_user_id))}
 
 @app.get("/api/maps/{map_id}")
 async def get_map_data(map_id: str):
     g = get_map(map_id)
     if not g: return JSONResponse({"error": "Not found"}, 404)
-    return {"nodes": [n.model_dump() for n in g.nodes], "edges": [e.model_dump() for e in g.edges]}
+    return {"nodes":[n.model_dump() for n in g.nodes],"edges":[e.model_dump() for e in g.edges]}
 
 @app.delete("/api/maps/{map_id}")
-async def del_map(map_id: str):
-    delete_map(map_id)
+async def del_map(map_id: str, x_user_id: str = Header(None)):
+    delete_map(map_id, _uid(x_user_id))
     return {"status": "deleted"}
 
+@app.post("/api/maps/{map_id}/restore")
+async def restore(map_id: str):
+    restore_map(map_id)
+    return {"status": "restored"}
+
 @app.post("/api/maps/{map_id}/confirm")
-async def confirm(map_id: str):
-    confirm_map(map_id)
-    return {"status": "confirmed"}
+async def confirm(map_id: str, x_user_id: str = Header(None)):
+    confirm_map(map_id, _uid(x_user_id))
+    return {"status":"confirmed","quality":map_quality_score(map_id)}
 
 @app.post("/api/maps/{map_id}/unconfirm")
-async def unconfirm(map_id: str):
-    from backend.app.services.storage import _conn
-    from datetime import datetime
-    c = _conn()
-    c.execute("UPDATE maps SET status='draft', updated_at=? WHERE id=?", (datetime.now().isoformat(), map_id))
-    c.commit(); c.close()
+async def unconfirm(map_id: str, x_user_id: str = Header(None)):
+    unconfirm_map(map_id, _uid(x_user_id))
     return {"status": "draft"}
 
 @app.post("/api/corrections")
-async def submit_correction(body: dict = Body(...)):
+async def submit_correction(body: dict = Body(...), x_user_id: str = Header(None)):
+    from backend.app.services.storage import save_correction
     cid = save_correction(body.get("map_id",""), body.get("type","edit"),
-        body.get("original"), body.get("corrected"))
+        body.get("original"), body.get("corrected"), _uid(x_user_id))
     return {"id": cid}
 
+# ── Community ──
 @app.post("/api/community/share")
-async def share(body: dict = Body(...)):
-    cid = share_to_community(body["map_id"], body.get("user_id","anonymous"),
+async def share(body: dict = Body(...), x_user_id: str = Header(None)):
+    cid = share_to_community(body["map_id"], _uid(x_user_id),
         body["title"], body.get("description",""), body.get("domain","general"))
     return {"id": cid}
+
+@app.delete("/api/community/{cid}")
+async def remove_share(cid: str, x_user_id: str = Header(None)):
+    unshare(cid, _uid(x_user_id))
+    return {"status": "removed"}
 
 @app.get("/api/community")
 async def community(domain: str = None, limit: int = 50):
     return {"maps": get_community_maps(domain, limit)}
 
-@app.post("/api/community/{community_id}/upvote")
-async def upvote(community_id: str):
-    upvote_community_map(community_id)
+@app.post("/api/community/{cid}/upvote")
+async def upvote(cid: str, x_user_id: str = Header(None)):
+    upvote_community_map(cid, _uid(x_user_id))
     return {"status": "upvoted"}
 
+@app.post("/api/community/{cid}/favorite")
+async def favorite(cid: str, x_user_id: str = Header(None)):
+    action = toggle_favorite(_uid(x_user_id), cid)
+    return {"status": action}
+
+@app.get("/api/favorites")
+async def favorites(x_user_id: str = Header(None)):
+    if not x_user_id: return {"favorites": []}
+    return {"favorites": get_favorites(x_user_id)}
+
+# ── Stats ──
 @app.get("/api/stats")
 async def stats():
-    return {"corrections": get_corrections_stats(), "training": get_training_stats()}
+    return get_training_stats()
+
+# ── Admin ──
+@app.get("/api/admin/maps")
+async def admin_maps(key: str = ""):
+    if key != ADMIN_KEY: return JSONResponse({"error": "unauthorized"}, 403)
+    return {"maps": admin_get_all_maps()}
+
+@app.get("/api/admin/users")
+async def admin_users(key: str = ""):
+    if key != ADMIN_KEY: return JSONResponse({"error": "unauthorized"}, 403)
+    return {"users": admin_get_all_users()}
+
+@app.post("/api/admin/export")
+async def admin_export(key: str = ""):
+    if key != ADMIN_KEY: return JSONResponse({"error": "unauthorized"}, 403)
+    n = export_training()
+    return {"exported": n}
