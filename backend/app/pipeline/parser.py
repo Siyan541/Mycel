@@ -1,7 +1,6 @@
 import re, uuid, os
 from collections import Counter
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from backend.app.models import Section, Skeleton
 
 CHAPTER_RE = [r"^chapter\s+\d+", r"^\d+\s+[A-Z][a-z]", r"^\d+\.\s+[A-Z]",

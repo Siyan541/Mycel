@@ -1,7 +1,5 @@
 import uuid, logging
 from rapidfuzz import fuzz
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from backend.app.models import GraphNode, GraphEdge, KnowledgeGraph
 
 logger = logging.getLogger(__name__)
