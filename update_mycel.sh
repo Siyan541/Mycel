@@ -1,3 +1,41 @@
+#!/bin/bash
+set -e
+echo "🍄 Mycel — Complete frontend + backend fix..."
+
+# Fix Together.ai extraction quality
+cat > backend/app/services/llm.py << 'PYEOF'
+import os, json, logging, httpx
+from backend.app.config import LLM_PROVIDER, LLM_MODEL, TOGETHER_API_KEY, TOGETHER_MODEL
+logger = logging.getLogger(__name__)
+
+def chat(messages, json_schema=None, temperature=0.1, max_tokens=1500):
+    if LLM_PROVIDER == "together":
+        return _together(messages, json_schema, temperature, max_tokens)
+    return _ollama(messages, json_schema, temperature, max_tokens)
+
+def _ollama(messages, schema, temp, max_tok):
+    import ollama as ol
+    kw = {"model": LLM_MODEL, "messages": messages,
+          "options": {"temperature": temp, "num_ctx": 4096, "num_predict": max_tok}}
+    if schema: kw["format"] = schema
+    return ol.chat(**kw).message.content
+
+def _together(messages, schema, temp, max_tok):
+    body = {"model": TOGETHER_MODEL, "messages": messages,
+            "temperature": temp, "max_tokens": max_tok}
+    if schema:
+        body["response_format"] = {"type": "json_object"}
+    with httpx.Client(timeout=120) as c:
+        r = c.post("https://api.together.xyz/v1/chat/completions",
+            headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
+            json=body)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+PYEOF
+echo "  ✓ llm.py — json_object mode for Together.ai"
+
+# Write complete App.jsx
+cat > frontend/src/App.jsx << 'JSXEOF'
 import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"react";
 import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard}from"./api";
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
@@ -274,3 +312,8 @@ h("div",{style:{marginTop:4,borderTop:"1px solid "+P.border,paddingTop:4,color:P
 h("div",{style:{position:"absolute",bottom:8,right:8,display:"flex",gap:3,zIndex:5}},
 [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:32,height:32,borderRadius:8,background:P.surface,border:"1px solid "+P.border,color:P.text,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);})))
 );}
+JSXEOF
+echo "  ✓ App.jsx — complete with all views"
+echo ""
+echo "DEPLOY: git add -A && git commit -m 'complete UI' && git push"
+echo "Wait for Vercel to rebuild (uncheck build cache if needed)"
