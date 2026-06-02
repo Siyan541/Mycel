@@ -67,9 +67,13 @@ class UserLevel(str, Enum):
     organizer = "organizer"
 
 LEVEL_THRESHOLDS = {
-    "none": 0, "beginner": 1, "experienced": 50,
-    "expert": 200, "professional": 500, "organizer": 1500
+    "none": 0, "beginner": 1, "experienced": 75,
+    "expert": 300, "professional": 1000, "organizer": 5000
 }
+
+# Professional requires: 1000+ pts, 10+ confirmed maps, 50+ community upvotes
+# Organizer requires: 5000+ pts, 25+ confirmed maps, admin approval
+# These are checked in storage.py get_effective_level()
 
 def get_level(points):
     level = "none"

@@ -102,6 +102,55 @@ def update_user(user_id, display_name=None, bio=None, theme=None, language=None)
     c.commit(); c.close()
 
 # Credits
+
+# Effective level considers: points, confirmed maps, upvotes, time, quality
+def get_effective_level(user_id):
+    """Level based on multiple factors, not just points."""
+    c = _conn()
+    row = c.execute("SELECT points FROM users WHERE id=?", (user_id,)).fetchone()
+    if not row: c.close(); return "none"
+    points = row[0]
+    
+    # Count confirmed maps
+    confirmed = c.execute("SELECT COUNT(*) FROM maps WHERE user_id=? AND status='confirmed'", (user_id,)).fetchone()[0]
+    
+    # Count total upvotes received on community maps
+    upvotes = c.execute("SELECT COALESCE(SUM(cm.upvotes),0) FROM community_maps cm WHERE cm.user_id=?", (user_id,)).fetchone()[0]
+    
+    # Count edits (corrections)
+    edits = c.execute("SELECT COUNT(*) FROM corrections WHERE user_id=?", (user_id,)).fetchone()[0]
+    
+    # Days on platform
+    created = c.execute("SELECT created_at FROM users WHERE id=?", (user_id,)).fetchone()
+    days = 0
+    if created and created[0]:
+        try:
+            from datetime import datetime
+            created_date = datetime.fromisoformat(created[0].replace('Z',''))
+            days = (datetime.now() - created_date).days
+        except: pass
+    
+    c.close()
+    
+    # Composite score
+    # Points are the base, but top levels need more
+    score = points
+    
+    # Level determination with multi-factor requirements
+    level = "none"
+    if score >= 1:
+        level = "beginner"
+    if score >= 75 and confirmed >= 1:
+        level = "experienced"
+    if score >= 300 and confirmed >= 5 and upvotes >= 10:
+        level = "expert"
+    if score >= 1000 and confirmed >= 10 and upvotes >= 50 and edits >= 20 and days >= 14:
+        level = "professional"  
+    if score >= 5000 and confirmed >= 25 and upvotes >= 200 and edits >= 100 and days >= 60:
+        level = "organizer"
+    
+    return level
+
 def add_points(user_id, points, action, target_id=""):
     c = _conn()
     c.execute("UPDATE users SET points=points+? WHERE id=?", (points, user_id))
