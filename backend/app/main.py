@@ -158,3 +158,18 @@ async def test_llm():
         return {"status":"ok","provider":LLM_PROVIDER,"model":TOGETHER_MODEL if LLM_PROVIDER=="together" else LLM_MODEL,
                 "concepts_found":len(parsed.get("concepts",[])),"relations_found":len(parsed.get("relations",[])),"parsed":parsed}
     except Exception as e: return {"error":str(e),"provider":LLM_PROVIDER}
+
+# Serve uploaded PDF for the split-screen viewer
+from fastapi.responses import FileResponse
+@app.get("/api/maps/{map_id}/pdf")
+async def get_pdf(map_id: str):
+    """Return the original PDF for the split-screen viewer."""
+    from backend.app.services.storage import _conn
+    c = _conn()
+    row = c.execute("SELECT filename FROM maps WHERE id=?", (map_id,)).fetchone()
+    c.close()
+    if not row: return JSONResponse({"error": "Not found"}, 404)
+    from backend.app.config import UPLOAD_DIR
+    filepath = UPLOAD_DIR / row[0]
+    if not filepath.exists(): return JSONResponse({"error": "PDF not found on disk"}, 404)
+    return FileResponse(str(filepath), media_type="application/pdf")

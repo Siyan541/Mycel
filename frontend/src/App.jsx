@@ -2,6 +2,8 @@ import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"rea
 import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile}from"./api";
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
 import{organicLayout,edgePath,sPath,wrap,nSize,convexHull,hullPath,getNeighbors}from"./utils/layout";
+import PDFViewer from './components/PDFViewer.jsx';
+import { getPdfUrl } from './api';
 
 function histR(s,a){
   switch(a.type){
@@ -15,7 +17,7 @@ function histR(s,a){
 
 var h=React.createElement;
 function B(c,bg){return{padding:"10px 18px",background:bg||"rgba(162,155,254,0.12)",border:"1px solid "+(c?c+"40":"rgba(162,155,254,0.3)"),borderRadius:8,color:c||"#A29BFE",fontSize:14,fontWeight:500,cursor:"pointer",fontFamily:"inherit"};}
-function fmtDate(d){if(!d)return'';try{return new Date(d+'Z').toLocaleDateString();}catch(e){return d.split('T')[0]||'';}}
+function fmtDate(d){if(!d)return'';try{var dt=new Date(d+'Z');return dt.toLocaleDateString()+' '+dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return d||'';}}
 
 export default function App(){
   var init={nodes:[],edges:[],drawings:[]};
@@ -41,6 +43,8 @@ export default function App(){
   var TXT=darkMode[0]?P.text:"#1A1510",DIM=darkMode[0]?P.dim:"#4A3E2D",MUT=darkMode[0]?P.muted:"#4A3E2D";
   var cRef=useRef(null);
 
+  var referMode = useState(false);
+  
   useEffect(function(){var uid=localStorage.getItem("mycel_uid");if(uid)getMe().then(function(d){if(d.user)user[1](d.user);}).catch(function(){});},[]);
   useEffect(function(){
     if(view[0]==="library")getMaps().then(function(d){maps[1](d.maps||[]);}).catch(function(){});
@@ -131,13 +135,14 @@ export default function App(){
   var onWheel=useCallback(function(e){e.preventDefault();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var sx=e.clientX-rc.left,sy=e.clientY-rc.top,f=e.deltaY>0?0.9:1.1;cam[1](function(c){var nz=Math.max(0.15,Math.min(5,c.z*f));return{x:sx-(sx-c.x)*(nz/c.z),y:sy-(sy-c.y)*(nz/c.z),z:nz};});},[]);
   var onDbl=useCallback(function(e){var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var w=s2w(e.clientX-rc.left,e.clientY-rc.top);var hit=null;for(var i=0;i<vn.length;i++){var dx=w.x-vn[i].x,dy=w.y-vn[i].y;if(dx*dx+dy*dy<vn[i].r*vn[i].r){hit=vn[i];break;}}if(hit){coll[1](function(prev){var n2=new Set(prev);if(n2.has(hit.id))n2.delete(hit.id);else n2.add(hit.id);return n2;});}else{fit(nodes);}},[vn,s2w,fit,nodes]);
 
-  var magnify=function(nid,e){if(e)e.stopPropagation();if(sel[0]===nid){sel[1](null);return;}sel[1](nid);var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();cam[1]({x:-n.x*2+rc.width/2,y:-n.y*2+rc.height/2,z:2});};
+  var magnify=function(nid,e){if(e)e.stopPropagation();if(sel[0]===nid){sel[1](null);return;}sel[1](nid);};
+  var zoomTo=function(nid){var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();cam[1]({x:-n.x*2.5+rc.width/2,y:-n.y*2.5+rc.height/2,z:2.5});sel[1](nid);};
 
   var selN=sel[0]?nm[sel[0]]:null;
   var connE=selN?ve.filter(function(e){return e.source===sel[0]||e.target===sel[0];}):[];
   var showD=cam[0].z>0.4,showTm=cam[0].z>0.5;
   var stages={uploading:"Uploading",extract:"Extracting",validate:"Validating",done:"Complete",parse:"Parsing",chunk:"Chunking"};
-  var cursor=tool[0]==='draw'?'crosshair':tool[0]==='eraser'?'cell':(drag[0]&&drag[0].t==='p')?'grabbing':'grab';
+  var cursor=tool[0]==='draw'?'crosshair':tool[0]==='eraser'?'cell':tool[0]==='magnify'?'zoom-in':(drag[0]&&drag[0].t==='p')?'grabbing':'grab';
 
   // ═══ BUILD VIEWS AS SEPARATE VARIABLES ═══
 
@@ -166,7 +171,7 @@ export default function App(){
     ),
     view[0]==='graph'?h("div",{style:{display:"flex",gap:4,alignItems:"center"}},
       h("span",{style:{fontSize:14,color:DIM,marginRight:10}},vn.length+" · "+ve.length),
-      [{k:'select',l:'↖'},{k:'draw',l:'✎'},{k:'eraser',l:'⌫'}].map(function(b){return h("button",{key:b.k,onClick:function(){tool[1](b.k);},style:{padding:"6px 12px",borderRadius:6,border:tool[0]===b.k?"1px solid "+TXT+"30":"1px solid transparent",background:tool[0]===b.k?BG:"transparent",color:tool[0]===b.k?TXT:DIM,fontSize:14,cursor:"pointer"}},b.l);}),
+      [{k:'select',l:'↖ Select'},{k:'magnify',l:'🔍 Zoom'},{k:'draw',l:'✎ Draw'},{k:'eraser',l:'⌫ Erase'}].map(function(b){return h("button",{key:b.k,onClick:function(){tool[1](b.k);},style:{padding:"6px 12px",borderRadius:6,border:tool[0]===b.k?"1px solid "+TXT+"30":"1px solid transparent",background:tool[0]===b.k?BG:"transparent",color:tool[0]===b.k?TXT:DIM,fontSize:14,cursor:"pointer"}},b.l);}),
       tool[0]==='draw'?["#A29BFE","#5EECD5","#F0A08A","#FDCB6E","#FD79A8","#E8ECF4"].map(function(c){return h("div",{key:c,onClick:function(){dc[1](c);},style:{width:18,height:18,borderRadius:"50%",background:c,cursor:"pointer",outline:dc[0]===c?"2px solid #fff":"none",outlineOffset:2,marginLeft:2}});}):null,
       h("button",{onClick:addNode,style:{padding:"6px 12px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:TXT,fontSize:13,cursor:"pointer",marginLeft:6}},"+Node"),
       h("button",{onClick:undo,style:{padding:"6px 10px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:hist.past.length?TXT:DIM,fontSize:13,cursor:"pointer",opacity:hist.past.length?1:0.4,marginLeft:4}},"↩"),
@@ -177,38 +182,24 @@ export default function App(){
       user[0]?h("span",{style:{fontSize:13,color:"#A29BFE",cursor:"pointer"},onClick:function(){view[1]('account');}},user[0].display_name+" · "+user[0].points+"pts"):null)
   );
 
-  var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:24, padding:"40px 20px"}},
-    h("h1", {style:{fontSize:32, fontWeight:700, background:"linear-gradient(135deg,#6C5CE7,#00B8A9)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent"}}, "Mycel"),
-    h("p", {style:{fontSize:16, color:MUT, lineHeight:1.7, maxWidth:440, textAlign:"center"}}, "Upload a textbook chapter. AI extracts concepts and shows how they connect."),
-  
-    // Conditional upload area: logged in ? (progress or prompt) : login prompt
-    loggedIn   // <-- replace with your actual logged-in state (e.g., user !== null)
-      ? (prog[0] && prog[0].stage !== 'done'
-          ? h("div", {style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center"}},   // progress UI
-              h("div", {style:{fontSize:16, fontWeight:600, marginBottom:6}}, (stages[prog[0].stage] || 'Processing...')),
-              h("div", {style:{fontSize:13, color:DIM, marginBottom:10}}, prog[0].message),
-              h("div", {style:{height:6, background:BG, borderRadius:3, overflow:"hidden", maxWidth:280, margin:"0 auto"}},
-                h("div", {style:{height:"100%", width:Math.max((prog[0].progress||0)*100,3)+"%", background:"linear-gradient(90deg,#6C5CE7,#00B8A9)", borderRadius:3}})
-              )
-            )
-          : h("div", {onClick:() => { if(!upl[0]) document.getElementById('fi')?.click(); }, style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center", cursor:upl[0] ? "wait" : "pointer"}},
-              h("input", {id:"fi", type:"file", accept:".pdf,.docx,.txt,.md,.epub", style:{display:"none"}, disabled:upl[0], onChange:(e) => handleUpload(e.target.files?.[0])}),
-              h("div", null,
-                h("div", {style:{fontSize:17, fontWeight:500, marginBottom:6}}, "Drop a file or click to upload"),
-                h("div", {style:{fontSize:14, color:DIM}}, "PDF, DOCX, TXT, MD, EPUB")
-              )
-            )
-        )
-      : h("div", {onClick:() => { if(!upl[0]) document.getElementById('fi2')?.click(); }, style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center", cursor:upl[0] ? "wait" : "pointer"}},
-          h("input", {id:"fi2", type:"file", accept:".pdf,.docx,.txt,.md,.epub", style:{display:"none"}, disabled:upl[0], onChange:(e) => handleUpload(e.target.files?.[0])}),
-          h("div", null,
-            h("div", {style:{fontSize:17, fontWeight:500, marginBottom:6}}, "Drop a file or click to upload"),
-            h("div", {style:{fontSize:13, color:DIM}}, "Log in to save to your library")
-          )
-        ),
-  
-    h("button", {onClick:() => view[1]('library'), style:B(DIM,"transparent")}, "Browse library")
-  ) : null;
+var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:24, padding:"40px 20px"}},
+  h("h1", {style:{fontSize:32, fontWeight:700, background:"linear-gradient(135deg,#6C5CE7,#00B8A9)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent"}}, "Mycel"),
+  h("p", {style:{fontSize:16, color:MUT, lineHeight:1.7, maxWidth:440, textAlign:"center"}}, "Upload a textbook chapter. AI extracts concepts and shows how they connect."),
+  h("div", {onClick:function(){if(!upl[0]){var el=document.getElementById('fi');if(el)el.click();}}, style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center", cursor:upl[0]?"wait":"pointer"}},
+    h("input", {id:"fi", type:"file", accept:".pdf,.docx,.txt,.md,.epub", style:{display:"none"}, disabled:upl[0], onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
+    prog[0] && prog[0].stage !== 'done'
+      ? h("div", null,
+          h("div", {style:{fontSize:16, fontWeight:600, marginBottom:6}}, stages[prog[0].stage] || 'Processing...'),
+          h("div", {style:{fontSize:13, color:DIM, marginBottom:10}}, prog[0].message),
+          h("div", {style:{height:6, background:BG, borderRadius:3, overflow:"hidden", maxWidth:280, margin:"0 auto"}},
+            h("div", {style:{height:"100%", width:Math.max((prog[0].progress||0)*100,3)+"%", background:"linear-gradient(90deg,#6C5CE7,#00B8A9)", borderRadius:3}})))
+      : h("div", null,
+          h("div", {style:{fontSize:17, fontWeight:500, marginBottom:6}}, "Drop a file or click to upload"),
+          h("div", {style:{fontSize:14, color:DIM}}, "PDF, DOCX, TXT, MD, EPUB supported"),
+          !user[0] ? h("div", {style:{fontSize:12, color:DIM, marginTop:8}}, "Log in to save maps to your library") : null)
+  ),
+  h("button", {onClick:function(){view[1]('library');}, style:B(DIM,"transparent")}, "Browse library")
+) : null;
 
   var libraryView=view[0]==='library'?h("div",{key:"lb",style:{flex:1,padding:28,overflowY:"auto"}},
     h("h2",{style:{fontSize:20,fontWeight:600,marginBottom:18}},"Your Library"),
@@ -340,7 +331,7 @@ export default function App(){
         var sx2=n.x*cam[0].z+cam[0].x,sy2=n.y*cam[0].z+cam[0].y;
         var labelSz=impSize(n.id,14),descSz=impSize(n.id,10);
         return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam[0].z+")",style:{cursor:tool[0]==='select'?'pointer':'inherit'},
-          onClick:function(ev){if(tool[0]!=='select')return;magnify(n.id,ev);},
+          onClick:function(ev){ev.stopPropagation();if(tool[0]==='magnify'){zoomTo(n.id);}else if(tool[0]==='select'){magnify(n.id,ev);}},
           onPointerDown:function(ev){if(tool[0]!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var px=ev.clientX-rc.left,py=ev.clientY-rc.top;var nbrs=getNeighbors(n.id,edges);var offsets={};Object.keys(nbrs).forEach(function(id){offsets[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});drag[1]({t:'c',nid:n.id,nbrs:nbrs,sx:px,sy:py,ox:n.x,oy:n.y,off:offsets});ev.preventDefault();}},
           isSel?h("rect",{x:-n.w/2-6,y:-totalH/2-6,width:n.w+12,height:totalH+12,rx:14,fill:SURF,stroke:t.a,strokeWidth:2,opacity:0.95}):null,
           isHov&&!isSel?h("rect",{x:-n.w/2-4,y:-totalH/2-4,width:n.w+8,height:totalH+8,rx:12,fill:"none",stroke:t.a,strokeWidth:1,opacity:0.3,strokeDasharray:"4 3"}):null,
@@ -357,7 +348,7 @@ export default function App(){
       return h("div",{style:{position:"absolute",left:cx2,top:cy2,width:cW,background:SURF,border:"1px solid "+BRD,borderRadius:14,padding:"14px 16px",boxShadow:"0 8px 32px rgba(0,0,0,0.3)",zIndex:20,maxHeight:"55vh",overflowY:"auto"}},
         h("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:6}},
           h("div",{style:{width:8,height:8,borderRadius:"50%",background:t.a}}),
-          h("span",{style:{fontSize:12,color:t.a,fontWeight:600,textTransform:"uppercase"}},selN.concept_type),
+          h("select",{value:selN.concept_type,onChange:function(ev){setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(nd){if(nd.id!==sel[0])return nd;return Object.assign({},nd,{concept_type:ev.target.value});})});});},style:{fontSize:12,color:t.a,fontWeight:600,textTransform:"uppercase",background:"transparent",border:"1px solid "+t.a+"30",borderRadius:4,padding:"2px 6px",cursor:"pointer"}},["theory","principle","definition","method","example","evidence","argument","term","framework","phenomenon"].map(function(ct){return h("option",{key:ct,value:ct,style:{background:BG,color:TXT}},ct);})),
           h("span",{style:{fontSize:12,color:DIM,marginLeft:"auto"}},Math.round((selN.confidence||0)*100)+"%"),
           h("button",{onClick:function(){sel[1](null);},style:{background:"none",border:"none",color:DIM,fontSize:16,cursor:"pointer"}},"×")),
         ef[0]==='label'?h("input",{value:ev[0],onChange:function(e){ev[1](e.target.value);},autoFocus:true,
@@ -377,17 +368,17 @@ export default function App(){
           connE.map(function(e,i){var isSrc=e.source===sel[0],oId=isSrc?e.target:e.source,o=nm[oId];var cat=edgeCat(e.relation_type),es=P.edges[cat]||P.edges.custom;
             return h("div",{key:i,onClick:function(){magnify(oId);},style:{padding:"6px 8px",background:BG,borderRadius:6,marginBottom:3,borderLeft:"3px solid "+es.color,cursor:"pointer"}},
               h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12}},
-                h("span",{style:{color:es.color,fontWeight:600,fontSize:10,textTransform:"uppercase"}},(e.relation_type||'').replace(/_/g,' ')),
+                h("select",{value:e.relation_type||"REQUIRES",onClick:function(ev){ev.stopPropagation();},onChange:function(ev){ev.stopPropagation();setData(function(dd){return Object.assign({},dd,{edges:dd.edges.map(function(ed){if(ed.source===e.source&&ed.target===e.target&&ed.relation_type===e.relation_type)return Object.assign({},ed,{relation_type:ev.target.value});return ed;})});});},style:{color:es.color,fontWeight:600,fontSize:10,textTransform:"uppercase",background:"transparent",border:"none",cursor:"pointer",padding:0}},["IMPLIES","REQUIRES","DEFINED_BY","CONTAINS","PART_OF","CAUSES","ENABLES","GENERALIZES","SPECIALIZES","ILLUSTRATES","EXTENDS","CONSTRAINS","CONTRADICTS","PREREQUISITE_FOR"].map(function(rt){return h("option",{key:rt,value:rt,style:{background:BG,color:TXT}},rt.replace(/_/g," "));})),
                 h("span",{style:{color:DIM}},(isSrc?"→ ":"← ")+(o?o.label:"?"))));})
         ):null);
     })():null,
     // Legend
-    h("div",{style:{position:"absolute",top:10,left:10,background:SURF+"DD",backdropFilter:"blur(8px)",padding:"12px 14px",borderRadius:12,border:"1px solid "+BRD,fontSize:12,zIndex:5}},
-      ["theorem","definition","principle","method","framework","example"].map(function(t2){var c=P.types[t2];if(!c)return null;return h("div",{key:t2,style:{display:"flex",alignItems:"center",gap:6,marginBottom:3}},h("div",{style:{width:8,height:8,borderRadius:"50%",background:c.a}}),h("span",{style:{color:c.a}},t2));}),
+    h("div",{style:{position:"absolute",top:10,left:10,background:SURF+"DD",backdropFilter:"blur(8px)",padding:"14px 18px",borderRadius:14,border:"1px solid "+BRD,fontSize:14,zIndex:5}},
+      ["theorem","definition","principle","method","framework","example"].map(function(t2){var c=P.types[t2];if(!c)return null;return h("div",{key:t2,style:{display:"flex",alignItems:"center",gap:6,marginBottom:3}},h("div",{style:{width:10,height:10,borderRadius:"50%",background:c.a}}),h("span",{style:{color:c.a}},t2));}),
       h("div",{style:{marginTop:6,borderTop:"1px solid "+BRD,paddingTop:6,color:DIM,lineHeight:1.6,fontSize:11}},"Click=magnify · Drag=move · Dbl=fold")),
     // Zoom
     h("div",{style:{position:"absolute",bottom:10,right:10,display:"flex",gap:4,zIndex:5}},
-      [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:48,height:48,borderRadius:10,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);}))
+      [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:56,height:56,borderRadius:12,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);}))
   ):null;
 
   // ═══ ASSEMBLE ═══

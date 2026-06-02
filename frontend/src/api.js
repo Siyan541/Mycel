@@ -34,3 +34,8 @@ export function postComment(cid,content,username){return fetch(API+"/api/communi
 export function postFeedback(category,content){return fetch(API+"/api/feedback",{method:"POST",headers:ah(),body:JSON.stringify({category:category,content:content})}).then(function(r){return r.json();});}
 
 export function getStats(){return fetch(API+"/api/stats").then(function(r){return r.json();});}
+
+export function getPdfUrl(mapId) {
+  var API = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:8000";
+  return API + "/api/maps/" + mapId + "/pdf";
+}
