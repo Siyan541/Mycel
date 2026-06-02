@@ -176,30 +176,25 @@ async def admin_users(key: str = ""):
 
 @app.get("/api/test-llm")
 async def test_llm():
-    import httpx
-    from backend.app.config import LLM_PROVIDER, TOGETHER_API_KEY, TOGETHER_MODEL
+    from backend.app.config import LLM_PROVIDER, TOGETHER_MODEL, LLM_MODEL
+    from backend.app.services.llm import chat
+    from backend.app.pipeline.extractor import PROMPT, JOINT_SCHEMA, _clean_json
     try:
-        body = {
-            "model": TOGETHER_MODEL,
-            "messages": [
-                {"role": "user", "content": "Extract concepts from: Photosynthesis converts sunlight to energy using chlorophyll. Return JSON with a concepts array."}
-            ],
-            "temperature": 0.1,
-            "max_tokens": 1000
-        }
-        with httpx.Client(timeout=60) as c:
-            r = c.post("https://api.together.xyz/v1/chat/completions",
-                headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
-                json=body)
-            return {
-                "status_code": r.status_code,
-                "model_used": TOGETHER_MODEL,
-                "provider": LLM_PROVIDER,
-                "api_key_prefix": TOGETHER_API_KEY[:8] + "..." if TOGETHER_API_KEY else "NOT SET",
-                "response_body": r.text[:1000]
-            }
+        text = "Photosynthesis is the process by which green plants convert light energy into chemical energy. It occurs in chloroplasts, specifically using chlorophyll pigments. The light-dependent reactions happen in the thylakoid membranes, producing ATP and NADPH. The Calvin cycle then uses these products to fix carbon dioxide into glucose molecules. This process is essential for life on Earth as it produces oxygen as a byproduct."
+        raw = chat(
+            [{"role": "system", "content": PROMPT},
+             {"role": "user", "content": f'Read this text and extract concepts and relations:\n\n{text}\n\nReturn ONLY JSON with "concepts" and "relations" arrays.'}],
+            json_schema=JOINT_SCHEMA, temperature=0.05, max_tokens=2000)
+        cleaned = _clean_json(raw)
+        try: parsed = json.loads(cleaned)
+        except: parsed = {"parse_error": cleaned[:500]}
+        return {"status": "ok", "provider": LLM_PROVIDER,
+                "model": TOGETHER_MODEL if LLM_PROVIDER == "together" else LLM_MODEL,
+                "concepts_found": len(parsed.get("concepts", [])),
+                "relations_found": len(parsed.get("relations", [])),
+                "parsed": parsed}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "provider": LLM_PROVIDER}
     
 @app.post("/api/admin/export")
 async def admin_export(key: str = ""):
