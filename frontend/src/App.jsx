@@ -327,4 +327,4 @@ h("div",{style:{position:"absolute",top:10,left:10,background:SURF+"DD",backdrop
 h("div",{style:{marginTop:6,borderTop:"1px solid "+BRD,paddingTop:6,color:DIM,lineHeight:1.6,fontSize:11}},"Drag=move · Dbl=fold · Click=magnify",h("br"),"V=select D=draw E=erase",h("br"),"Ctrl+Z/Y · Del=remove")),
 h("div",{style:{position:"absolute",bottom:10,right:10,display:"flex",gap:4,zIndex:5}},
 [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))}}):fit(nodes)},style:{width:36,height:36,borderRadius:8,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l)})))
-}
+);}
