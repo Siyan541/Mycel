@@ -1,3 +1,11 @@
+#!/bin/bash
+set -e
+echo "🍄 Mycel v10 — Major platform update..."
+
+# ═══════════════════════════════════════════════════════════════════════
+# BACKEND: storage.py — private library, comments, feedback, export
+# ═══════════════════════════════════════════════════════════════════════
+cat > backend/app/services/storage.py << 'PYEOF'
 import json, sqlite3, uuid, hashlib, logging
 from pathlib import Path
 from datetime import datetime
@@ -282,3 +290,246 @@ def admin_get_all_users():
 def admin_get_feedback():
     c = _conn(); rows = c.execute("SELECT id,user_id,category,content,created_at FROM feedback ORDER BY created_at DESC").fetchall()
     c.close(); return [{"id":r[0],"user_id":r[1],"category":r[2],"content":r[3],"created_at":r[4]} for r in rows]
+PYEOF
+echo "  ✓ storage.py — private library, comments, feedback, settings"
+
+# ═══════════════════════════════════════════════════════════════════════
+# BACKEND: main.py — all endpoints including new ones
+# ═══════════════════════════════════════════════════════════════════════
+cat > backend/app/main.py << 'PYEOF'
+import os, shutil, json, logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, Header, Body, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from backend.app.config import UPLOAD_DIR
+from backend.app.pipeline.orchestrator import run
+from backend.app.services.storage import *
+
+logging.basicConfig(level=logging.INFO)
+ADMIN_KEY = os.getenv("ADMIN_KEY", "mycel_admin_2026")
+
+@asynccontextmanager
+async def lifespan(app): yield
+
+app = FastAPI(title="Mycel", version="3.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+ALLOWED_EXT = {'.pdf','.docx','.txt','.md','.markdown','.rst','.tex','.epub'}
+def _uid(h): return h or "anonymous"
+
+@app.get("/")
+async def root(): return {"status":"ok","version":"3.1.0"}
+
+# Auth
+@app.post("/api/auth/register")
+async def register(body: dict = Body(...)): uid,err = create_user(body["username"],body["password"],body.get("display_name")); return JSONResponse({"error":err},400) if err else {"user_id":uid,"username":body["username"]}
+
+@app.post("/api/auth/login")
+async def login(body: dict = Body(...)): u = login_user(body["username"],body["password"]); return JSONResponse({"error":"Invalid credentials"},401) if not u else {"user":u}
+
+@app.get("/api/auth/me")
+async def me(x_user_id: str = Header(None)):
+    if not x_user_id: return JSONResponse({"error":"Not logged in"},401)
+    u = get_user(x_user_id); return JSONResponse({"error":"Not found"},404) if not u else {"user":u}
+
+@app.put("/api/auth/profile")
+async def update_profile(body: dict = Body(...), x_user_id: str = Header(None)):
+    if not x_user_id: return JSONResponse({"error":"Not logged in"},401)
+    update_user(x_user_id, body.get("display_name"), body.get("bio"), body.get("theme"), body.get("language"))
+    return {"status":"updated"}
+
+# Activity
+@app.get("/api/activity")
+async def activity(x_user_id: str = Header(None)): return {"activity": get_activity(x_user_id) if x_user_id else []}
+
+@app.get("/api/leaderboard")
+async def leaderboard(): return {"users": get_leaderboard()}
+
+# Maps — PRIVATE
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...), x_user_id: str = Header(None)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXT: return JSONResponse({"error":"Unsupported format"},400)
+    fp = UPLOAD_DIR / file.filename
+    with open(fp,"wb") as f: shutil.copyfileobj(file.file, f)
+    graph = run(str(fp))
+    mid = save_map(file.filename, graph, _uid(x_user_id))
+    return {"status":"success","map_id":mid,"document":file.filename,"nodes":[n.model_dump() for n in graph.nodes],"edges":[e.model_dump() for e in graph.edges],"node_count":len(graph.nodes),"edge_count":len(graph.edges)}
+
+@app.get("/api/maps")
+async def list_maps(x_user_id: str = Header(None)): return {"maps": get_maps(_uid(x_user_id))}
+
+@app.get("/api/maps/{map_id}")
+async def get_map_data(map_id: str):
+    g = get_map(map_id)
+    if not g: return JSONResponse({"error":"Not found"},404)
+    return {"nodes":[n.model_dump() for n in g.nodes],"edges":[e.model_dump() for e in g.edges]}
+
+@app.get("/api/maps/{map_id}/export")
+async def export_map(map_id: str):
+    """Export map as JSON download."""
+    raw = get_map_json(map_id)
+    if not raw: return JSONResponse({"error":"Not found"},404)
+    return Response(content=raw, media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=mycel_{map_id}.json"})
+
+@app.delete("/api/maps/{map_id}")
+async def del_map(map_id: str, x_user_id: str = Header(None)): delete_map(map_id, _uid(x_user_id)); return {"status":"deleted"}
+
+@app.post("/api/maps/{map_id}/confirm")
+async def confirm(map_id: str, x_user_id: str = Header(None)): confirm_map(map_id, _uid(x_user_id)); return {"status":"confirmed","quality":map_quality_score(map_id)}
+
+@app.post("/api/maps/{map_id}/unconfirm")
+async def unconfirm(map_id: str, x_user_id: str = Header(None)): unconfirm_map(map_id, _uid(x_user_id)); return {"status":"draft"}
+
+@app.post("/api/corrections")
+async def submit_corr(body: dict = Body(...), x_user_id: str = Header(None)):
+    cid = save_correction(body.get("map_id",""), body.get("type","edit"), body.get("original"), body.get("corrected"), _uid(x_user_id))
+    return {"id":cid}
+
+# Community
+@app.post("/api/community/share")
+async def share(body: dict = Body(...), x_user_id: str = Header(None)):
+    cid = share_to_community(body["map_id"], _uid(x_user_id), body["title"], body.get("description",""), body.get("domain","general"))
+    return {"id":cid}
+
+@app.delete("/api/community/{cid}")
+async def remove_share(cid: str, x_user_id: str = Header(None)): unshare(cid, _uid(x_user_id)); return {"status":"removed"}
+
+@app.get("/api/community")
+async def community(domain: str = None, limit: int = 50): return {"maps": get_community_maps(domain, limit)}
+
+@app.post("/api/community/{cid}/upvote")
+async def upvote(cid: str, x_user_id: str = Header(None)): upvote_community_map(cid, _uid(x_user_id)); return {"status":"upvoted"}
+
+@app.post("/api/community/{cid}/favorite")
+async def favorite(cid: str, x_user_id: str = Header(None)): return {"status": toggle_favorite(_uid(x_user_id), cid)}
+
+@app.get("/api/favorites")
+async def favorites(x_user_id: str = Header(None)):
+    if not x_user_id: return {"favorites":[]}
+    return {"favorites": get_favorites(x_user_id)}
+
+# Comments
+@app.post("/api/community/{cid}/comments")
+async def post_comment(cid: str, body: dict = Body(...), x_user_id: str = Header(None)):
+    cid2 = add_comment(cid, _uid(x_user_id), body.get("username","anonymous"), body["content"])
+    return {"id":cid2}
+
+@app.get("/api/community/{cid}/comments")
+async def list_comments(cid: str): return {"comments": get_comments(cid)}
+
+# Feedback
+@app.post("/api/feedback")
+async def post_feedback(body: dict = Body(...), x_user_id: str = Header(None)):
+    fid = add_feedback(_uid(x_user_id), body.get("category","general"), body["content"])
+    return {"id":fid}
+
+# Stats
+@app.get("/api/stats")
+async def stats(): return get_training_stats()
+
+# Admin
+@app.get("/api/admin/maps")
+async def admin_maps(key: str = ""): return JSONResponse({"error":"unauthorized"},403) if key != ADMIN_KEY else {"maps": admin_get_all_maps()}
+
+@app.get("/api/admin/users")
+async def admin_users(key: str = ""): return JSONResponse({"error":"unauthorized"},403) if key != ADMIN_KEY else {"users": admin_get_all_users()}
+
+@app.get("/api/admin/feedback")
+async def admin_fb(key: str = ""): return JSONResponse({"error":"unauthorized"},403) if key != ADMIN_KEY else {"feedback": admin_get_feedback()}
+
+@app.post("/api/admin/export")
+async def admin_export(key: str = ""): return JSONResponse({"error":"unauthorized"},403) if key != ADMIN_KEY else {"exported": export_training()}
+
+# LLM test (keep for diagnostics)
+@app.get("/api/test-llm")
+async def test_llm():
+    from backend.app.config import LLM_PROVIDER, TOGETHER_MODEL, LLM_MODEL
+    from backend.app.services.llm import chat
+    from backend.app.pipeline.extractor import PROMPT, JOINT_SCHEMA, _clean_json
+    try:
+        text = "Photosynthesis converts sunlight to energy using chlorophyll in chloroplasts. Light reactions produce ATP and NADPH in thylakoids. The Calvin cycle fixes CO2 into glucose."
+        raw = chat([{"role":"system","content":PROMPT},{"role":"user","content":f'Extract concepts and relations:\n\n{text}'}], json_schema=JOINT_SCHEMA, temperature=0.05, max_tokens=2000)
+        cleaned = _clean_json(raw)
+        try: parsed = json.loads(cleaned)
+        except: parsed = {"parse_error": cleaned[:500]}
+        return {"status":"ok","provider":LLM_PROVIDER,"model":TOGETHER_MODEL if LLM_PROVIDER=="together" else LLM_MODEL,
+                "concepts_found":len(parsed.get("concepts",[])),"relations_found":len(parsed.get("relations",[])),"parsed":parsed}
+    except Exception as e: return {"error":str(e),"provider":LLM_PROVIDER}
+PYEOF
+echo "  ✓ main.py — comments, feedback, export, private library"
+
+# ═══════════════════════════════════════════════════════════════════════
+# FRONTEND: api.js — complete with all new endpoints
+# ═══════════════════════════════════════════════════════════════════════
+cat > frontend/src/api.js << 'APIEOF'
+var API=(typeof import.meta!=="undefined"&&import.meta.env&&import.meta.env.VITE_API_URL)||"http://localhost:8000";
+function uid(){return localStorage.getItem("mycel_uid")||"";}
+function ah(){var h={"Content-Type":"application/json"};var u=uid();if(u)h["x-user-id"]=u;return h;}
+function uh(){var h={};var u=uid();if(u)h["x-user-id"]=u;return h;}
+
+export function register(u,p,d){return fetch(API+"/api/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p,display_name:d||u})}).then(function(r){return r.json();});}
+export function login(u,p){return fetch(API+"/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})}).then(function(r){return r.json();});}
+export function getMe(){return fetch(API+"/api/auth/me",{headers:uh()}).then(function(r){return r.json();});}
+export function updateProfile(dn,bio,theme,lang){return fetch(API+"/api/auth/profile",{method:"PUT",headers:ah(),body:JSON.stringify({display_name:dn,bio:bio,theme:theme,language:lang})}).then(function(r){return r.json();});}
+
+export function getActivity(){return fetch(API+"/api/activity",{headers:uh()}).then(function(r){return r.json();});}
+export function getLeaderboard(){return fetch(API+"/api/leaderboard").then(function(r){return r.json();});}
+
+export function uploadFile(file){var f=new FormData();f.append("file",file);return fetch(API+"/api/upload",{method:"POST",body:f,headers:uh()}).then(function(r){return r.json();});}
+export var uploadPDF=uploadFile;
+export function getMaps(){return fetch(API+"/api/maps",{headers:uh()}).then(function(r){return r.json();});}
+export function getMap(id){return fetch(API+"/api/maps/"+id).then(function(r){return r.json();});}
+export function exportMap(id){window.open(API+"/api/maps/"+id+"/export","_blank");}
+export function deleteMap(id){return fetch(API+"/api/maps/"+id,{method:"DELETE",headers:uh()}).then(function(r){return r.json();});}
+export function confirmMap(id){return fetch(API+"/api/maps/"+id+"/confirm",{method:"POST",headers:uh()}).then(function(r){return r.json();});}
+export function unconfirmMap(id){return fetch(API+"/api/maps/"+id+"/unconfirm",{method:"POST",headers:uh()}).then(function(r){return r.json();});}
+export function submitCorrection(data){return fetch(API+"/api/corrections",{method:"POST",headers:ah(),body:JSON.stringify(data)}).then(function(r){return r.json();});}
+
+export function getCommunityMaps(d){var u=API+"/api/community";if(d&&d!=="all")u+="?domain="+encodeURIComponent(d);return fetch(u).then(function(r){return r.json();});}
+export function shareMap(id,t,desc,dom){return fetch(API+"/api/community/share",{method:"POST",headers:ah(),body:JSON.stringify({map_id:id,title:t||"",description:desc||"",domain:dom||"general"})}).then(function(r){return r.json();});}
+export function unshareMap(cid){return fetch(API+"/api/community/"+cid,{method:"DELETE",headers:uh()}).then(function(r){return r.json();});}
+export function upvoteCommunityMap(id){return fetch(API+"/api/community/"+id+"/upvote",{method:"POST",headers:uh()}).then(function(r){return r.json();});}
+export function favoriteMap(id){return fetch(API+"/api/community/"+id+"/favorite",{method:"POST",headers:uh()}).then(function(r){return r.json();});}
+export function getFavorites(){return fetch(API+"/api/favorites",{headers:uh()}).then(function(r){return r.json();});}
+
+export function getComments(cid){return fetch(API+"/api/community/"+cid+"/comments").then(function(r){return r.json();});}
+export function postComment(cid,content,username){return fetch(API+"/api/community/"+cid+"/comments",{method:"POST",headers:ah(),body:JSON.stringify({content:content,username:username||"anonymous"})}).then(function(r){return r.json();});}
+
+export function postFeedback(category,content){return fetch(API+"/api/feedback",{method:"POST",headers:ah(),body:JSON.stringify({category:category,content:content})}).then(function(r){return r.json();});}
+
+export function getStats(){return fetch(API+"/api/stats").then(function(r){return r.json();});}
+APIEOF
+echo "  ✓ api.js — all endpoints including comments, feedback, export"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🍄 Mycel v10 backend complete!"
+echo ""
+echo "NEW ENDPOINTS:"
+echo "  GET  /api/maps/{id}/export     — download map as JSON"
+echo "  POST /api/community/{id}/comments — add comment"
+echo "  GET  /api/community/{id}/comments — list comments"
+echo "  POST /api/feedback             — submit feedback"
+echo "  GET  /api/admin/feedback?key=X — view all feedback"
+echo "  PUT  /api/auth/profile         — update theme/language"
+echo "  GET  /api/leaderboard          — top users by points"
+echo ""
+echo "FIXES:"
+echo "  • Library is PRIVATE (returns empty for anonymous users)"
+echo "  • User settings: theme + language stored in DB"
+echo "  • Comments on community maps"
+echo "  • Feedback collection"
+echo "  • Map export as JSON"
+echo ""
+echo "FRONTEND: Update App.jsx to use new endpoints."
+echo "  Key changes needed in App.jsx:"
+echo "  • Convert timestamps: new Date(m.created_at+'Z').toLocaleDateString()"
+echo "  • Import: exportMap, postComment, getComments, postFeedback"
+echo "  • Add Help/Feedback tab"
+echo "  • Add leaderboard section to Community"
+echo "  • Add Export button to Library cards"
+echo ""
+echo "DEPLOY: git add -A && git commit -m 'v10' && git push"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
