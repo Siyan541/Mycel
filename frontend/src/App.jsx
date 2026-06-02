@@ -37,8 +37,8 @@ export default function App(){
   var darkMode=useState(localStorage.getItem("mycel_theme")!=="light");
 
   var P=PALETTES.aurora;
-  var BG=darkMode[0]?P.bg:"#F5F0E8",SURF=darkMode[0]?P.surface:"#FFFBF5",BRD=darkMode[0]?P.border:"#D4CCBB";
-  var TXT=darkMode[0]?P.text:"#2C2417",DIM=darkMode[0]?P.dim:"#9B8E7D",MUT=darkMode[0]?P.muted:"#6B5E4D";
+  var BG=darkMode[0]?P.bg:"#F8F6F1",SURF=darkMode[0]?P.surface:"#FFFFFF",BRD=darkMode[0]?P.border:"#E0D8CC";
+  var TXT=darkMode[0]?P.text:"#1A1510",DIM=darkMode[0]?P.dim:"#4A3E2D",MUT=darkMode[0]?P.muted:"#4A3E2D";
   var cRef=useRef(null);
 
   useEffect(function(){var uid=localStorage.getItem("mycel_uid");if(uid)getMe().then(function(d){if(d.user)user[1](d.user);}).catch(function(){});},[]);
@@ -104,7 +104,7 @@ export default function App(){
   var s2w=useCallback(function(sx,sy){return{x:(sx-cam[0].x)/cam[0].z,y:(sy-cam[0].y)/cam[0].z};},[cam[0]]);
   var w2s=useCallback(function(wx,wy){return{x:wx*cam[0].z+cam[0].x,y:wy*cam[0].z+cam[0].y};},[cam[0]]);
   var findT=useCallback(function(desc,skip){if(!desc)return[];var f=[];allL.forEach(function(lb){if(lb===skip||lb.length<3)return;if(desc.toLowerCase().indexOf(lb.toLowerCase())>=0)f.push(lb);});return f.slice(0,4);},[allL]);
-  var impSize=function(nid,base){var d=deg[nid]||0;return Math.round(base+(d/Math.max(maxDeg,1))*10);};
+  var impSize=function(nid,base){var d=deg[nid]||0;return Math.round(base+(d/Math.max(maxDeg,1))*20);};
 
   // Pointer handlers
   var onDown=useCallback(function(e){
@@ -131,7 +131,7 @@ export default function App(){
   var onWheel=useCallback(function(e){e.preventDefault();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var sx=e.clientX-rc.left,sy=e.clientY-rc.top,f=e.deltaY>0?0.9:1.1;cam[1](function(c){var nz=Math.max(0.15,Math.min(5,c.z*f));return{x:sx-(sx-c.x)*(nz/c.z),y:sy-(sy-c.y)*(nz/c.z),z:nz};});},[]);
   var onDbl=useCallback(function(e){var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var w=s2w(e.clientX-rc.left,e.clientY-rc.top);var hit=null;for(var i=0;i<vn.length;i++){var dx=w.x-vn[i].x,dy=w.y-vn[i].y;if(dx*dx+dy*dy<vn[i].r*vn[i].r){hit=vn[i];break;}}if(hit){coll[1](function(prev){var n2=new Set(prev);if(n2.has(hit.id))n2.delete(hit.id);else n2.add(hit.id);return n2;});}else{fit(nodes);}},[vn,s2w,fit,nodes]);
 
-  var magnify=function(nid,e){if(e)e.stopPropagation();if(sel[0]===nid){sel[1](null);return;}sel[1](nid);var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();cam[1]({x:-n.x*1.5+rc.width/2,y:-n.y*1.5+rc.height/2,z:1.5});};
+  var magnify=function(nid,e){if(e)e.stopPropagation();if(sel[0]===nid){sel[1](null);return;}sel[1](nid);var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();cam[1]({x:-n.x*2+rc.width/2,y:-n.y*2+rc.height/2,z:2});};
 
   var selN=sel[0]?nm[sel[0]]:null;
   var connE=selN?ve.filter(function(e){return e.source===sel[0]||e.target===sel[0];}):[];
@@ -165,31 +165,50 @@ export default function App(){
       )
     ),
     view[0]==='graph'?h("div",{style:{display:"flex",gap:4,alignItems:"center"}},
-      h("span",{style:{fontSize:12,color:DIM,marginRight:8}},vn.length+" · "+ve.length),
+      h("span",{style:{fontSize:14,color:DIM,marginRight:10}},vn.length+" · "+ve.length),
       [{k:'select',l:'↖'},{k:'draw',l:'✎'},{k:'eraser',l:'⌫'}].map(function(b){return h("button",{key:b.k,onClick:function(){tool[1](b.k);},style:{padding:"6px 12px",borderRadius:6,border:tool[0]===b.k?"1px solid "+TXT+"30":"1px solid transparent",background:tool[0]===b.k?BG:"transparent",color:tool[0]===b.k?TXT:DIM,fontSize:14,cursor:"pointer"}},b.l);}),
       tool[0]==='draw'?["#A29BFE","#5EECD5","#F0A08A","#FDCB6E","#FD79A8","#E8ECF4"].map(function(c){return h("div",{key:c,onClick:function(){dc[1](c);},style:{width:18,height:18,borderRadius:"50%",background:c,cursor:"pointer",outline:dc[0]===c?"2px solid #fff":"none",outlineOffset:2,marginLeft:2}});}):null,
       h("button",{onClick:addNode,style:{padding:"6px 12px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:TXT,fontSize:13,cursor:"pointer",marginLeft:6}},"+Node"),
       h("button",{onClick:undo,style:{padding:"6px 10px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:hist.past.length?TXT:DIM,fontSize:13,cursor:"pointer",opacity:hist.past.length?1:0.4,marginLeft:4}},"↩"),
-      h("button",{onClick:redo,style:{padding:"6px 10px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:hist.future.length?TXT:DIM,fontSize:13,cursor:"pointer",opacity:hist.future.length?1:0.4}},"↪")
+      h("button",{onClick:redo,style:{padding:"6px 10px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:hist.future.length?TXT:DIM,fontSize:13,cursor:"pointer",opacity:hist.future.length?1:0.4}},"↪"),h("div",{style:{width:1,height:18,background:BRD,margin:"0 6px"}}),h("button",{onClick:function(){if(mapId[0]){window.open(((typeof import.meta!=="undefined"&&import.meta.env&&import.meta.env.VITE_API_URL)||"http://localhost:8000")+"/api/maps/"+mapId[0]+"/export","_blank");}},style:{padding:"6px 14px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:DIM,fontSize:14,cursor:"pointer"}},"Export")
     ):null,
     h("div",{style:{display:"flex",alignItems:"center",gap:8}},
       h("button",{onClick:function(){var n=!darkMode[0];darkMode[1](n);localStorage.setItem("mycel_theme",n?"dark":"light");},style:{padding:"6px 10px",borderRadius:6,border:"1px solid "+BRD,background:"transparent",color:DIM,fontSize:13,cursor:"pointer"}},darkMode[0]?"☀":"🌙"),
       user[0]?h("span",{style:{fontSize:13,color:"#A29BFE",cursor:"pointer"},onClick:function(){view[1]('account');}},user[0].display_name+" · "+user[0].points+"pts"):null)
   );
 
-  var homeView=view[0]==='home'?h("div",{key:"hm",style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:24,padding:"40px 20px"}},
-    h("h1",{style:{fontSize:32,fontWeight:700,background:"linear-gradient(135deg,#6C5CE7,#00B8A9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Mycel"),
-    h("p",{style:{fontSize:16,color:MUT,lineHeight:1.7,maxWidth:440,textAlign:"center"}},"Upload a textbook chapter. AI extracts concepts and shows how they connect."),
-    user[0]?h("div",{onClick:function(){if(!upl[0]){var el=document.getElementById('fi');if(el)el.click();}},style:{width:"100%",maxWidth:480,border:"2px dashed "+BRD,borderRadius:16,padding:"32px 24px",textAlign:"center",cursor:upl[0]?"wait":"pointer"}},
-      h("input",{id:"fi",type:"file",accept:".pdf,.docx,.txt,.md,.epub",style:{display:"none"},disabled:upl[0],onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
-      prog[0]&&prog[0].stage!=='done'?h("div",null,
-        h("div",{style:{fontSize:16,fontWeight:600,marginBottom:6}},stages[prog[0].stage]||'Processing...'),
-        h("div",{style:{fontSize:13,color:DIM,marginBottom:10}},prog[0].message),
-        h("div",{style:{height:6,background:BG,borderRadius:3,overflow:"hidden",maxWidth:280,margin:"0 auto"}},h("div",{style:{height:"100%",width:Math.max((prog[0].progress||0)*100,3)+"%",background:"linear-gradient(90deg,#6C5CE7,#00B8A9)",borderRadius:3}}))
-      ):h("div",null,h("div",{style:{fontSize:17,fontWeight:500,marginBottom:6}},"Drop a file or click to upload"),h("div",{style:{fontSize:14,color:DIM}},"PDF, DOCX, TXT, MD, EPUB"))
-    ):h("div",{style:{padding:32,textAlign:"center"}},h("p",{style:{fontSize:16,color:MUT,marginBottom:16}},"Create an account to start uploading"),h("button",{onClick:function(){view[1]('account');},style:B()},"Go to Account")),
-    h("button",{onClick:function(){view[1]('library');},style:B(DIM,"transparent")},"Browse library")
-  ):null;
+  var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:24, padding:"40px 20px"}},
+    h("h1", {style:{fontSize:32, fontWeight:700, background:"linear-gradient(135deg,#6C5CE7,#00B8A9)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent"}}, "Mycel"),
+    h("p", {style:{fontSize:16, color:MUT, lineHeight:1.7, maxWidth:440, textAlign:"center"}}, "Upload a textbook chapter. AI extracts concepts and shows how they connect."),
+  
+    // Conditional upload area: logged in ? (progress or prompt) : login prompt
+    loggedIn   // <-- replace with your actual logged-in state (e.g., user !== null)
+      ? (prog[0] && prog[0].stage !== 'done'
+          ? h("div", {style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center"}},   // progress UI
+              h("div", {style:{fontSize:16, fontWeight:600, marginBottom:6}}, (stages[prog[0].stage] || 'Processing...')),
+              h("div", {style:{fontSize:13, color:DIM, marginBottom:10}}, prog[0].message),
+              h("div", {style:{height:6, background:BG, borderRadius:3, overflow:"hidden", maxWidth:280, margin:"0 auto"}},
+                h("div", {style:{height:"100%", width:Math.max((prog[0].progress||0)*100,3)+"%", background:"linear-gradient(90deg,#6C5CE7,#00B8A9)", borderRadius:3}})
+              )
+            )
+          : h("div", {onClick:() => { if(!upl[0]) document.getElementById('fi')?.click(); }, style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center", cursor:upl[0] ? "wait" : "pointer"}},
+              h("input", {id:"fi", type:"file", accept:".pdf,.docx,.txt,.md,.epub", style:{display:"none"}, disabled:upl[0], onChange:(e) => handleUpload(e.target.files?.[0])}),
+              h("div", null,
+                h("div", {style:{fontSize:17, fontWeight:500, marginBottom:6}}, "Drop a file or click to upload"),
+                h("div", {style:{fontSize:14, color:DIM}}, "PDF, DOCX, TXT, MD, EPUB")
+              )
+            )
+        )
+      : h("div", {onClick:() => { if(!upl[0]) document.getElementById('fi2')?.click(); }, style:{width:"100%", maxWidth:480, border:"2px dashed "+BRD, borderRadius:16, padding:"32px 24px", textAlign:"center", cursor:upl[0] ? "wait" : "pointer"}},
+          h("input", {id:"fi2", type:"file", accept:".pdf,.docx,.txt,.md,.epub", style:{display:"none"}, disabled:upl[0], onChange:(e) => handleUpload(e.target.files?.[0])}),
+          h("div", null,
+            h("div", {style:{fontSize:17, fontWeight:500, marginBottom:6}}, "Drop a file or click to upload"),
+            h("div", {style:{fontSize:13, color:DIM}}, "Log in to save to your library")
+          )
+        ),
+  
+    h("button", {onClick:() => view[1]('library'), style:B(DIM,"transparent")}, "Browse library")
+  ) : null;
 
   var libraryView=view[0]==='library'?h("div",{key:"lb",style:{flex:1,padding:28,overflowY:"auto"}},
     h("h2",{style:{fontSize:20,fontWeight:600,marginBottom:18}},"Your Library"),
@@ -368,7 +387,7 @@ export default function App(){
       h("div",{style:{marginTop:6,borderTop:"1px solid "+BRD,paddingTop:6,color:DIM,lineHeight:1.6,fontSize:11}},"Click=magnify · Drag=move · Dbl=fold")),
     // Zoom
     h("div",{style:{position:"absolute",bottom:10,right:10,display:"flex",gap:4,zIndex:5}},
-      [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:36,height:36,borderRadius:8,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);}))
+      [{l:"+",f:1.2},{l:"−",f:1/1.2},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:48,height:48,borderRadius:10,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);}))
   ):null;
 
   // ═══ ASSEMBLE ═══
