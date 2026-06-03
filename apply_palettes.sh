@@ -1,3 +1,9 @@
+#!/bin/bash
+set -e
+echo "🍄 Mycel — Palettes + Advanced Settings..."
+
+# ═══ Update theme.js with all palettes ═══
+cat > frontend/src/utils/theme.js << 'THEOF'
 // All palettes — dark and light
 export var PALETTES = {
   aurora: {
@@ -134,3 +140,51 @@ export var ARROW_CATS=new Set(["logical","causal"]);
 export function edgeCat(t){for(var c in EC)if(EC[c].indexOf(t)>=0)return c;return"custom";}
 export function typeColor(P,t){return P.types[t]||P.types.term;}
 export function importanceFontSize(d,c,md){var raw=(d/Math.max(md,1))*0.6+c*0.4;return Math.round(11+raw*11);}
+THEOF
+echo "  ✓ theme.js — 7 palettes (4 dark + 3 light)"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🍄 Palettes installed!"
+echo ""
+echo "PALETTES AVAILABLE:"
+echo "  Dark:  aurora (default), dracula, nord, tokyo"
+echo "  Light: notion, paper, ice"
+echo ""
+echo "TO USE IN App.jsx:"
+echo "  1. Add palette state:"
+echo '     var palName = useState(localStorage.getItem("mycel_palette") || "aurora");'
+echo ""
+echo "  2. Change palette reference:"
+echo '     var P = PALETTES[palName[0]];'
+echo ""
+echo "  3. Update dark/light based on palette:"
+echo '     var isDark = P.mode === "dark";'
+echo '     var BG = P.bg, SURF = P.surface, BRD = P.border;'
+echo '     var TXT = P.text, DIM = P.dim, MUT = P.muted;'
+echo ""
+echo "  4. Add palette picker in Account/Settings:"
+echo '     h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:12}},'
+echo '       Object.keys(PALETTES).map(function(k){'
+echo '         var p=PALETTES[k];'
+echo '         return h("button",{key:k,onClick:function(){'
+echo '           palName[1](k);localStorage.setItem("mycel_palette",k);'
+echo '         },style:{padding:"6px 12px",borderRadius:6,fontSize:12,'
+echo '           background:palName[0]===k?p.bg:"transparent",'
+echo '           border:palName[0]===k?"2px solid "+p.types.theory.a:"1px solid "+BRD,'
+echo '           color:palName[0]===k?p.text:DIM}},p.name);'
+echo '       })'
+echo '     )'
+echo ""
+echo "  5. Add leaderboard visibility toggle in Account:"
+echo '     var showInLeaderboard = useState(localStorage.getItem("mycel_leaderboard")!=="false");'
+echo '     // Toggle button:'
+echo '     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},'
+echo '       h("span",null,"Show in leaderboard"),'
+echo '       h("button",{onClick:function(){'
+echo '         var n=!showInLeaderboard[0];showInLeaderboard[1](n);'
+echo '         localStorage.setItem("mycel_leaderboard",n?"true":"false");'
+echo '       },style:B(DIM,"transparent")},showInLeaderboard[0]?"Visible":"Hidden"))'
+echo ""
+echo "DEPLOY: git add -A && git commit -m 'palettes + split view' && git push"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

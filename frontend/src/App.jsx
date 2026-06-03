@@ -40,9 +40,11 @@ export default function App(){
   var referMode=useState(false);
   var darkMode=useState(localStorage.getItem("mycel_theme")!=="light");
 
-  var P=PALETTES.aurora;
-  var BG=darkMode[0]?P.bg:"#F8F6F1",SURF=darkMode[0]?P.surface:"#FFFFFF",BRD=darkMode[0]?P.border:"#E0D8CC";
-  var TXT=darkMode[0]?P.text:"#1A1510",DIM=darkMode[0]?P.dim:"#4A3E2D",MUT=darkMode[0]?P.muted:"#4A3E2D";
+  var palName=useState(localStorage.getItem("mycel_palette")||"aurora");
+  var P=PALETTES[palName[0]];
+  var BG=P.bg,SURF=P.surface,BRD=P.border;
+  var TXT=P.text,DIM=P.dim,MUT=P.muted;
+  
   var cRef=useRef(null);
 
   var referMode = useState(false);
@@ -306,16 +308,20 @@ var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"
       h("button",{onClick:function(){authMode[1](authMode[0]==="login"?"register":"login");},style:Object.assign({width:"100%"},B(DIM,"transparent"))},authMode[0]==="login"?"Need an account? Register":"Already have one? Log in"))
   ):null;
 
-  // ═══ GRAPH VIEW ═══
-  var graphView=view[0]==='graph'?(referMode[0]&&mapId[0]?h(PDFViewer,{key:"pv",pdfUrl:((typeof import.meta!=="undefined"&&import.meta.env&&import.meta.env.VITE_API_URL)||"http://localhost:8000")+"/api/maps/"+mapId[0]+"/pdf",nodes:vn,edges:ve,palette:P,selectedId:sel[0],onSelectConcept:function(id){sel[1](id);},onClose:function(){referMode[1](false);},darkMode:darkMode[0]}):h("div",{key:"gr",ref:cRef,style:{flex:1,position:"relative",overflow:"hidden",cursor:cursor},onPointerDown:onDown,onPointerMove:onMove,onPointerUp:onUp,onPointerLeave:onUp,onWheel:onWheel,onDoubleClick:onDbl},
+// ═══ GRAPH VIEW WITH SPLIT MODE ═══
+  // Replace your entire "var graphView = ..." block with this.
+  // This extracts graph content into a reusable array, then renders it
+  // either full-screen or side-by-side with PDFViewer.
+
+  var graphContent = view[0]==='graph' ? [
     // Dot grid
-    h("div",{style:{position:"absolute",inset:0,zIndex:0,pointerEvents:"none",backgroundImage:"radial-gradient(circle,"+P.dot+" 1px,transparent 1px)",backgroundSize:Math.max(16,26*cam[0].z)+"px "+Math.max(16,26*cam[0].z)+"px",backgroundPosition:(cam[0].x%(26*cam[0].z))+"px "+(cam[0].y%(26*cam[0].z))+"px"}}),
+    h("div",{key:"dots",style:{position:"absolute",inset:0,zIndex:0,pointerEvents:"none",backgroundImage:"radial-gradient(circle,"+P.dot+" 1px,transparent 1px)",backgroundSize:Math.max(16,26*cam[0].z)+"px "+Math.max(16,26*cam[0].z)+"px",backgroundPosition:(cam[0].x%(26*cam[0].z))+"px "+(cam[0].y%(26*cam[0].z))+"px"}}),
     // SVG
-    h("svg",{style:{position:"absolute",inset:0,width:"100%",height:"100%",zIndex:1,overflow:"visible"}},
+    h("svg",{key:"svg",style:{position:"absolute",inset:0,width:"100%",height:"100%",zIndex:1,overflow:"visible"}},
       h("defs",null,h("marker",{id:"ah",viewBox:"0 0 12 12",refX:"11",refY:"6",markerWidth:"7",markerHeight:"7",orient:"auto"},h("path",{d:"M1 2L10 6L1 10",fill:"none",stroke:"context-stroke",strokeWidth:"1.5",strokeLinecap:"round"}))),
       // Drawings
       drawings.map(function(dr,i){if(dr.points.length<2)return null;var d2='M'+dr.points[0].x+' '+dr.points[0].y;for(var j=1;j<dr.points.length;j++)d2+='L'+dr.points[j].x+' '+dr.points[j].y;return h("path",{key:"dr"+i,d:d2,fill:"none",stroke:dr.color,strokeWidth:dr.width/cam[0].z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam[0].x+","+cam[0].y+") scale("+cam[0].z+")"});}),
-      dp[0]&&dp[0].points.length>1?(function(){var d2='M'+dp[0].points[0].x+' '+dp[0].points[0].y;for(var j=1;j<dp[0].points.length;j++)d2+='L'+dp[0].points[j].x+' '+dp[0].points[j].y;return h("path",{d:d2,fill:"none",stroke:dp[0].color,strokeWidth:dp[0].width/cam[0].z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam[0].x+","+cam[0].y+") scale("+cam[0].z+")"});})():null,
+      dp[0]&&dp[0].points.length>1?(function(){var d2='M'+dp[0].points[0].x+' '+dp[0].points[0].y;for(var j=1;j<dp[0].points.length;j++)d2+='L'+dp[0].points[j].x+' '+dp[0].points[j].y;return h("path",{key:"adp",d:d2,fill:"none",stroke:dp[0].color,strokeWidth:dp[0].width/cam[0].z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam[0].x+","+cam[0].y+") scale("+cam[0].z+")"});})():null,
       // Hulls
       hulls.map(function(hl){return h("path",{key:hl.key,d:hl.d,fill:P.hullFill,stroke:P.hullStroke,strokeWidth:1,transform:"translate("+cam[0].x+","+cam[0].y+") scale("+cam[0].z+")"});}),
       // Edges
@@ -333,9 +339,9 @@ var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"
         var dl=showD?(n.dl||[]):[];var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0)+(n.imgH||0);
         var sx2=n.x*cam[0].z+cam[0].x,sy2=n.y*cam[0].z+cam[0].y;
         var labelSz=impSize(n.id,14),descSz=impSize(n.id,10);
-        return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam[0].z+")",style:{cursor:tool[0]==='select'?'pointer':'inherit'},
+        return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam[0].z+")",style:{cursor:tool[0]==='select'||tool[0]==='magnify'?'pointer':'inherit'},
           onClick:function(ev){ev.stopPropagation();if(tool[0]==='magnify'){zoomTo(n.id);}else if(tool[0]==='select'){magnify(n.id,ev);}},
-          onPointerDown:function(ev){if(tool[0]!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var px=ev.clientX-rc.left,py=ev.clientY-rc.top;var nbrs=getNeighbors(n.id,edges);var offsets={};Object.keys(nbrs).forEach(function(id){offsets[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});drag[1]({t:'c',nid:n.id,nbrs:nbrs,sx:px,sy:py,ox:n.x,oy:n.y,off:offsets});ev.preventDefault();}},
+          onPointerDown:function(ev){if(tool[0]==='magnify'){zoomTo(n.id);ev.stopPropagation();ev.preventDefault();return;}if(tool[0]!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var px=ev.clientX-rc.left,py=ev.clientY-rc.top;var nbrs=getNeighbors(n.id,edges);var offsets={};Object.keys(nbrs).forEach(function(id){offsets[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});drag[1]({t:'c',nid:n.id,nbrs:nbrs,sx:px,sy:py,ox:n.x,oy:n.y,off:offsets});ev.preventDefault();}},
           isSel?h("rect",{x:-n.w/2-6,y:-totalH/2-6,width:n.w+12,height:totalH+12,rx:14,fill:SURF,stroke:t.a,strokeWidth:2,opacity:0.95}):null,
           isHov&&!isSel?h("rect",{x:-n.w/2-4,y:-totalH/2-4,width:n.w+8,height:totalH+8,rx:12,fill:"none",stroke:t.a,strokeWidth:1,opacity:0.3,strokeDasharray:"4 3"}):null,
           h("circle",{cx:-n.w/2+6,cy:-totalH/2+6,r:4,fill:t.a,opacity:isSel?1:0.7}),
@@ -348,7 +354,7 @@ var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"
     selN?(function(){
       var sc=w2s(selN.x,selN.y);var t=typeColor(P,selN.concept_type);var rc=cRef.current?cRef.current.getBoundingClientRect():{width:800};
       var cW=280;var cx2=Math.min(Math.max(10,sc.x+80),rc.width-cW-16);var cy2=Math.max(10,sc.y-50);
-      return h("div",{style:{position:"absolute",left:cx2,top:cy2,width:cW,background:SURF,border:"1px solid "+BRD,borderRadius:14,padding:"14px 16px",boxShadow:"0 8px 32px rgba(0,0,0,0.3)",zIndex:20,maxHeight:"55vh",overflowY:"auto"}},
+      return h("div",{key:"dc",style:{position:"absolute",left:cx2,top:cy2,width:cW,background:SURF,border:"1px solid "+BRD,borderRadius:14,padding:"14px 16px",boxShadow:"0 8px 32px rgba(0,0,0,0.3)",zIndex:20,maxHeight:"55vh",overflowY:"auto"}},
         h("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:6}},
           h("div",{style:{width:8,height:8,borderRadius:"50%",background:t.a}}),
           h("select",{value:selN.concept_type,onChange:function(ev){setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(nd){if(nd.id!==sel[0])return nd;return Object.assign({},nd,{concept_type:ev.target.value});})});});},style:{fontSize:12,color:t.a,fontWeight:600,textTransform:"uppercase",background:"transparent",border:"1px solid "+t.a+"30",borderRadius:4,padding:"2px 6px",cursor:"pointer"}},["theory","principle","definition","method","example","evidence","argument","term","framework","phenomenon"].map(function(ct){return h("option",{key:ct,value:ct,style:{background:BG,color:TXT}},ct);})),
@@ -369,20 +375,44 @@ var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"
         connE.length>0?h("div",null,
           h("div",{style:{fontSize:12,color:DIM,fontWeight:600,marginBottom:4}},"Connections ("+connE.length+")"),
           connE.map(function(e,i){var isSrc=e.source===sel[0],oId=isSrc?e.target:e.source,o=nm[oId];var cat=edgeCat(e.relation_type),es=P.edges[cat]||P.edges.custom;
-            return h("div",{key:i,onClick:function(){magnify(oId);},style:{padding:"6px 8px",background:BG,borderRadius:6,marginBottom:3,borderLeft:"3px solid "+es.color,cursor:"pointer"}},
+            return h("div",{key:i,onClick:function(){zoomTo(oId);},style:{padding:"6px 8px",background:BG,borderRadius:6,marginBottom:3,borderLeft:"3px solid "+es.color,cursor:"pointer"}},
               h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12}},
                 h("select",{value:e.relation_type||"REQUIRES",onClick:function(ev){ev.stopPropagation();},onChange:function(ev){ev.stopPropagation();setData(function(dd){return Object.assign({},dd,{edges:dd.edges.map(function(ed){if(ed.source===e.source&&ed.target===e.target&&ed.relation_type===e.relation_type)return Object.assign({},ed,{relation_type:ev.target.value});return ed;})});});},style:{color:es.color,fontWeight:600,fontSize:10,textTransform:"uppercase",background:"transparent",border:"none",cursor:"pointer",padding:0}},["IMPLIES","REQUIRES","DEFINED_BY","CONTAINS","PART_OF","CAUSES","ENABLES","GENERALIZES","SPECIALIZES","ILLUSTRATES","EXTENDS","CONSTRAINS","CONTRADICTS","PREREQUISITE_FOR"].map(function(rt){return h("option",{key:rt,value:rt,style:{background:BG,color:TXT}},rt.replace(/_/g," "));})),
                 h("span",{style:{color:DIM}},(isSrc?"→ ":"← ")+(o?o.label:"?"))));})
         ):null);
     })():null,
     // Legend
-    h("div",{style:{position:"absolute",top:10,left:10,background:SURF+"DD",backdropFilter:"blur(8px)",padding:"14px 18px",borderRadius:14,border:"1px solid "+BRD,fontSize:14,zIndex:5}},
+    h("div",{key:"lg",style:{position:"absolute",top:10,left:10,background:SURF+"DD",backdropFilter:"blur(8px)",padding:"14px 18px",borderRadius:14,border:"1px solid "+BRD,fontSize:14,zIndex:5}},
       ["theorem","definition","principle","method","framework","example"].map(function(t2){var c=P.types[t2];if(!c)return null;return h("div",{key:t2,style:{display:"flex",alignItems:"center",gap:6,marginBottom:3}},h("div",{style:{width:10,height:10,borderRadius:"50%",background:c.a}}),h("span",{style:{color:c.a}},t2));}),
-      h("div",{style:{marginTop:6,borderTop:"1px solid "+BRD,paddingTop:6,color:DIM,lineHeight:1.6,fontSize:11}},"Click=magnify · Drag=move · Dbl=fold")),
-    // Zoom
-    h("div",{style:{position:"absolute",bottom:10,right:10,display:"flex",gap:4,zIndex:5}},
-      [{l:"+",f:1.3},{l:"−",f:1/1.3},{l:"⊡",f:0}].map(function(b){return h("button",{key:b.l,onClick:function(){b.f?cam[1](function(c){return{x:c.x,y:c.y,z:Math.max(0.15,Math.min(5,c.z*b.f))};}):fit(nodes);},style:{width:44,height:44,borderRadius:10,background:SURF,border:"1px solid "+BRD,color:TXT,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},b.l);}))
-    )):null;
+      h("div",{style:{marginTop:6,borderTop:"1px solid "+BRD,paddingTop:6,color:DIM,lineHeight:1.6,fontSize:11}},"🔍=zoom · Drag=move · Dbl=fold")),
+    // Zoom controls
+    h("div",{key:"zm",style:{position:"absolute",bottom:12,right:12,display:"flex",alignItems:"center",gap:4,background:SURF+"EE",backdropFilter:"blur(8px)",padding:"6px 10px",borderRadius:10,border:"1px solid "+BRD,zIndex:5}},
+      h("button",{onClick:function(){cam[1](function(c){var rc=cRef.current?cRef.current.getBoundingClientRect():{width:800,height:600};var cx=rc.width/2,cy=rc.height/2;var nz=Math.max(0.15,c.z/1.3);return{x:cx-(cx-c.x)*(nz/c.z),y:cy-(cy-c.y)*(nz/c.z),z:nz};});},style:{width:36,height:36,borderRadius:8,background:"transparent",border:"1px solid "+BRD,color:TXT,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"−"),
+      h("div",{style:{fontSize:12,color:DIM,width:48,textAlign:"center",cursor:"pointer"},onClick:function(){cam[1](function(c){return{x:c.x,y:c.y,z:1};});}},Math.round(cam[0].z*100)+"%"),
+      h("button",{onClick:function(){cam[1](function(c){var rc=cRef.current?cRef.current.getBoundingClientRect():{width:800,height:600};var cx=rc.width/2,cy=rc.height/2;var nz=Math.min(5,c.z*1.3);return{x:cx-(cx-c.x)*(nz/c.z),y:cy-(cy-c.y)*(nz/c.z),z:nz};});},style:{width:36,height:36,borderRadius:8,background:"transparent",border:"1px solid "+BRD,color:TXT,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"+"),
+      h("button",{onClick:function(){fit(nodes);},style:{width:36,height:36,borderRadius:8,background:"transparent",border:"1px solid "+BRD,color:DIM,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"⊡"))
+  ] : [];
+
+  // Graph container props (shared between split and full mode)
+  var graphProps = {ref:cRef,style:{flex:1,position:"relative",overflow:"hidden",cursor:cursor},onPointerDown:onDown,onPointerMove:onMove,onPointerUp:onUp,onPointerLeave:onUp,onWheel:onWheel,onDoubleClick:onDbl};
+
+  var graphView = view[0]==='graph' ? (
+    referMode[0] && mapId[0]
+      ? h("div",{key:"sp",style:{display:"flex",flex:1,overflow:"hidden"}},
+          h("div",{style:{flex:"0 0 45%",overflow:"hidden",borderRight:"1px solid "+BRD}},
+            h(PDFViewer,{
+              pdfUrl:((typeof import.meta!=="undefined"&&import.meta.env&&import.meta.env.VITE_API_URL)||"http://localhost:8000")+"/api/maps/"+mapId[0]+"/pdf",
+              nodes:vn,edges:ve,palette:P,selectedId:sel[0],
+              onSelectConcept:function(id){sel[1](id);zoomTo(id);},
+              onClose:function(){referMode[1](false);},
+              darkMode:darkMode[0],
+              splitMode:true
+            })
+          ),
+          h("div",graphProps,graphContent)
+        )
+      : h("div",Object.assign({key:"gr"},graphProps),graphContent)
+  ) : null;
 
   // ═══ ASSEMBLE ═══
   return h("div",{style:{height:"100vh",display:"flex",flexDirection:"column",background:BG,color:TXT,fontFamily:"'Inter',system-ui,sans-serif"}},
