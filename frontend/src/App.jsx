@@ -27,6 +27,8 @@ export default function App(){
   var undo=useCallback(function(){dispatch({type:'UNDO'});},[]);
   var redo=useCallback(function(){dispatch({type:'REDO'});},[]);
 
+  var uploadedFile = useState(null);
+
   var view=useState("home"),sel=useState(null),hov=useState(null),mapId=useState(null),maps=useState([]);
   var upl=useState(false),prog=useState(null),coll=useState(new Set()),ef=useState(null),ev=useState('');
   var cam=useState({x:0,y:0,z:0.75}),drag=useState(null),tool=useState('select'),dp=useState(null),dc=useState('#A29BFE');
@@ -72,6 +74,7 @@ export default function App(){
     if(!file)return;var ext=file.name.split('.').pop().toLowerCase();
     if(['pdf','docx','txt','md','epub'].indexOf(ext)<0)return;
     upl[1](true);prog[1]({stage:'uploading',progress:0,message:'Uploading...'});
+    uploadedFile[1](file);
     uploadPDF(file).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
@@ -117,7 +120,7 @@ export default function App(){
     if(tool[0]==='draw'){dp[1]({color:dc[0],points:[{x:w.x,y:w.y}],width:2});e.preventDefault();return;}
     if(tool[0]==='eraser'){setData(function(dd){return Object.assign({},dd,{drawings:dd.drawings.filter(function(dr){return!dr.points.some(function(pt){return Math.abs(pt.x-w.x)<20&&Math.abs(pt.y-w.y)<20;});})});});return;}
     var hit=null;for(var i=0;i<vn.length;i++){var dx=w.x-vn[i].x,dy=w.y-vn[i].y;if(dx*dx+dy*dy<vn[i].r*vn[i].r){hit=vn[i];break;}}
-    if(hit){var nbrs=getNeighbors(hit.id,edges);var offsets={};Object.keys(nbrs).forEach(function(id){offsets[id]={dx:(nm[id]?nm[id].x:0)-hit.x,dy:(nm[id]?nm[id].y:0)-hit.y};});drag[1]({t:'c',nid:hit.id,nbrs:nbrs,sx:sx,sy:sy,ox:hit.x,oy:hit.y,off:offsets});e.preventDefault();}
+    if(hit){if(tool[0]==='magnify'){zoomTo(hit.id);e.preventDefault();return;}var nbrs=getNeighbors(hit.id,edges);var offsets={};Object.keys(nbrs).forEach(function(id){offsets[id]={dx:(nm[id]?nm[id].x:0)-hit.x,dy:(nm[id]?nm[id].y:0)-hit.y};});drag[1]({t:'c',nid:hit.id,nbrs:nbrs,sx:sx,sy:sy,ox:hit.x,oy:hit.y,off:offsets});e.preventDefault();}
     else{if(tool[0]==='magnify'){cam[1]({x:-w.x*2+cRef.current.clientWidth/2,y:-w.y*2+cRef.current.clientHeight/2,z:Math.min(5,cam[0].z*1.5)});}else{drag[1]({t:'p',sx:sx,sy:sy,cx:cam[0].x,cy:cam[0].y});}}
   },[vn,s2w,cam[0],nm,edges,tool[0],dc[0],setData]);
 

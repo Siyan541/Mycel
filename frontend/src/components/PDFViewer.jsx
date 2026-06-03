@@ -230,9 +230,9 @@ export default function PDFViewer(props) {
     // RIGHT PANEL: Concept list (organized by page)
     h('div', { style: { flex: '0 0 50%', display: 'flex', flexDirection: 'column' } },
       // Panel header
-      h('div', { style: { padding: '8px 14px', background: SURF, borderBottom: '1px solid ' + BRD, display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        h('span', { style: { fontSize: 14, fontWeight: 600 } }, 'Concepts & Relations'),
-        h('span', { style: { fontSize: 12, color: DIM } }, nodes.length + ' concepts · ' + edges.length + ' relations')
+      h('div', { style: { display: 'flex', gap: 4 } },
+        h('button', { onClick: function() { setPanelMode('list'); }, style: { fontSize: 14, fontWeight: 600 } }, 'List'),
+        h('button', { onClick: function() { setPanelMode('graph'); }, style: { fontSize: 14, color: DIM } }, 'Graph')
       ),
       // Concept list
       h('div', { style: { flex: 1, overflowY: 'auto', padding: 14 } },
