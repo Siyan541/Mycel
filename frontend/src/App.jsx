@@ -1,9 +1,8 @@
 import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"react";
-import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile,getPdfUrl}from"./api";
+import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile}from"./api";
 import PDFViewer from'./components/PDFViewer.jsx';
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
 import{organicLayout,edgePath,sPath,wrap,nSize,convexHull,hullPath,getNeighbors}from"./utils/layout";
-import { getPdfUrl } from './api';
 
 function histR(s,a){
   switch(a.type){
@@ -305,7 +304,7 @@ var homeView = view[0] === 'home' ? h("div", {key:"hm", style:{flex:1, display:"
   ):null;
 
   // ═══ GRAPH VIEW ═══
-  var graphView=view[0]==='graph'?(referMode[0]&&mapId[0]?h(PDFViewer,{key:"pv",pdfUrl:getPdfUrl(mapId[0]),nodes:vn,edges:ve,palette:P,selectedId:sel[0],onSelectConcept:function(id){sel[1](id);},onClose:function(){referMode[1](false);},darkMode:darkMode[0]}):h("div",{key:"gr",ref:cRef,style:{flex:1,position:"relative",overflow:"hidden",cursor:cursor},onPointerDown:onDown,onPointerMove:onMove,onPointerUp:onUp,onPointerLeave:onUp,onWheel:onWheel,onDoubleClick:onDbl},
+  var graphView=view[0]==='graph'?(referMode[0]&&mapId[0]?h(PDFViewer,{key:"pv",pdfUrl:((typeof import.meta!=="undefined"&&import.meta.env&&import.meta.env.VITE_API_URL)||"http://localhost:8000")+"/api/maps/"+mapId[0]+"/pdf",nodes:vn,edges:ve,palette:P,selectedId:sel[0],onSelectConcept:function(id){sel[1](id);},onClose:function(){referMode[1](false);},darkMode:darkMode[0]}):h("div",{key:"gr",ref:cRef,style:{flex:1,position:"relative",overflow:"hidden",cursor:cursor},onPointerDown:onDown,onPointerMove:onMove,onPointerUp:onUp,onPointerLeave:onUp,onWheel:onWheel,onDoubleClick:onDbl},
     // Dot grid
     h("div",{style:{position:"absolute",inset:0,zIndex:0,pointerEvents:"none",backgroundImage:"radial-gradient(circle,"+P.dot+" 1px,transparent 1px)",backgroundSize:Math.max(16,26*cam[0].z)+"px "+Math.max(16,26*cam[0].z)+"px",backgroundPosition:(cam[0].x%(26*cam[0].z))+"px "+(cam[0].y%(26*cam[0].z))+"px"}}),
     // SVG
