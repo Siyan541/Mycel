@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 // PDF.js will be loaded from CDN in index.html:
 // <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -228,12 +228,10 @@ export default function PDFViewer(props) {
     ),
 
     // RIGHT PANEL: Concept list (organized by page)
+    !props.splitMode ?
     h('div', { style: { flex: '0 0 50%', display: 'flex', flexDirection: 'column' } },
       // Panel header
-      h('div', { style: { display: 'flex', gap: 4 } },
-        h('button', { onClick: function() { setPanelMode('list'); }, style: { fontSize: 14, fontWeight: 600 } }, 'List'),
-        h('button', { onClick: function() { setPanelMode('graph'); }, style: { fontSize: 14, color: DIM } }, 'Graph')
-      ),
+      h('div', { style: { padding: '8px 14px', borderBottom: '1px solid ' + BRD, fontSize: 14, fontWeight: 600, color: TXT } }, 'Concepts'),
       // Concept list
       h('div', { style: { flex: 1, overflowY: 'auto', padding: 14 } },
         Object.keys(conceptsByPage).sort(function(a, b) { return parseInt(a) - parseInt(b); }).map(function(pageNum) {
@@ -304,9 +302,7 @@ export default function PDFViewer(props) {
           );
         })
       )
-    )
+    ): null
   );
 }
 
-// Helper: useMemo needs to be imported at the top
-var useMemo = React.useMemo;
