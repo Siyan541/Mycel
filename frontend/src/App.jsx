@@ -1,5 +1,6 @@
 import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"react";
 import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile}from"./api";
+import PDFViewer from'./components/PDFViewer.jsx';
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
 import{organicLayout,edgePath,sPath,wrap,nSize,convexHull,hullPath,getNeighbors}from"./utils/layout";
 
@@ -62,6 +63,7 @@ export default function App(){
   var _palName=useState(localStorage.getItem("mycel_palette")||"aurora"),palName=_palName[0],setPalName=_palName[1];
   var _refer=useState(false),referMode=_refer[0],setRefer=_refer[1];
   var _upFile=useState(null),uploadedFile=_upFile[0],setUpFile=_upFile[1];
+  var _showSettings=useState(false),showSettings=_showSettings[0],setShowSettings=_showSettings[1];
 
   /* ── Theme (from palette, no separate darkMode) ── */
   var P=PALETTES[palName]||PALETTES.aurora;
@@ -206,7 +208,7 @@ export default function App(){
       h("button",{title:"Redo",onClick:redo,style:{padding:"3px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:hist.future.length?TXT:DIM,fontSize:12,cursor:"pointer",opacity:hist.future.length?1:0.4}},"↪"),
       h("div",{style:{width:1,height:14,background:BRD,margin:"0 4px"}}),
       h("button",{title:"Export JSON",onClick:function(){if(mapId)window.open(apiUrl()+"/api/maps/"+mapId+"/export","_blank");},style:{padding:"3px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:DIM,fontSize:12,cursor:"pointer"}},"↓"),
-      h("button",{title:"PDF split view",onClick:function(){setRefer(!referMode);},style:{padding:"3px 7px",borderRadius:5,border:referMode?"1px solid #A29BFE":"1px solid "+BRD,background:referMode?"rgba(162,155,254,0.12)":"transparent",color:referMode?"#A29BFE":DIM,fontSize:12,cursor:"pointer"}},"📖")
+      h("button",{title:"PDF split view",onClick:function(){setRefer(!referMode);},style:{padding:"3px 7px",borderRadius:5,border:referMode?"1px solid #A29BFE":"1px solid "+BRD,background:referMode?"rgba(162,155,254,0.12)":"transparent",color:referMode?"#A29BFE":DIM,fontSize:12,cursor:"pointer"}},"📖"),h("button",{title:"Settings",onClick:function(){setShowSettings(!showSettings);},style:{padding:"3px 7px",borderRadius:5,border:showSettings?"1px solid #A29BFE":"1px solid "+BRD,background:showSettings?"rgba(162,155,254,0.12)":"transparent",color:showSettings?"#A29BFE":DIM,fontSize:12,cursor:"pointer"}},"⚙")
     ):null,
     h("div",{style:{display:"flex",alignItems:"center",gap:6}},
       h("button",{onClick:function(){var next=isDark?'notion':'aurora';setPalName(next);localStorage.setItem("mycel_palette",next);},style:{padding:"3px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:DIM,fontSize:12,cursor:"pointer"}},isDark?"☀":"🌙"),
@@ -286,7 +288,7 @@ export default function App(){
         h("h3",{style:{fontSize:15,fontWeight:600,marginBottom:10}},"Settings"),
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}},h("span",{style:{fontSize:13}},"Theme"),h("button",{onClick:function(){var n=isDark?'notion':'aurora';setPalName(n);localStorage.setItem("mycel_palette",n);},style:B(DIM,"transparent")},isDark?"☀ Light":"🌙 Dark")),
         h("div",{style:{fontSize:13,marginBottom:6}},"Palette"),
-        h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}},Object.keys(PALETTES).map(function(k){var p=PALETTES[k];return h("div",{key:k,onClick:function(){setPalName(k);localStorage.setItem("mycel_palette",k);},style:{width:32,height:32,borderRadius:6,background:p.bg,border:palName===k?"2px solid "+p.types.theory.a:"1px solid "+BRD,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},h("div",{style:{width:10,height:10,borderRadius:"50%",background:p.types.theory.a}}));})),
+        h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}},Object.keys(PALETTES).map(function(k){var p=PALETTES[k];return h("div",{key:k,onClick:function(){setPalName(k);localStorage.setItem("mycel_palette",k);},style:{padding:"4px 8px",borderRadius:6,background:palName===k?p.bg:"transparent",border:palName===k?"2px solid "+p.types.theory.a:"1px solid "+BRD,cursor:"pointer",display:"flex",alignItems:"center",gap:6}},h("div",{style:{width:12,height:12,borderRadius:"50%",background:p.types.theory.a}}),h("span",{style:{fontSize:11,color:palName===k?p.text:DIM}},p.name));})),
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},h("span",{style:{fontSize:13}},"Onboarding"),h("button",{onClick:function(){setOnboard(true);},style:B(DIM,"transparent")},"Show again"))),
       h("div",{style:{padding:16,background:SURF,borderRadius:12,border:"1px solid "+BRD,marginBottom:14}},
         h("h3",{style:{fontSize:15,fontWeight:600,marginBottom:8}},"Credits"),
@@ -335,6 +337,19 @@ export default function App(){
     /* Legend */
     h("div",{key:"lg",style:{position:"absolute",top:8,left:8,background:SURF+"DD",backdropFilter:"blur(8px)",padding:"10px 12px",borderRadius:10,border:"1px solid "+BRD,fontSize:12,zIndex:5}},
       ["theory","definition","principle","method","framework","example"].map(function(t2){var c=P.types[t2];if(!c)return null;return h("div",{key:t2,style:{display:"flex",alignItems:"center",gap:5,marginBottom:2}},h("div",{style:{width:8,height:8,borderRadius:"50%",background:c.a}}),h("span",{style:{color:c.a}},t2));})),
+    /* Settings panel */
+    showSettings?h("div",{key:"st",style:{position:"absolute",top:8,right:8,width:240,background:SURF,border:"1px solid "+BRD,borderRadius:12,padding:"14px 16px",boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:25,maxHeight:"70vh",overflowY:"auto"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}},h("span",{style:{fontSize:14,fontWeight:600}},"Settings"),h("button",{onClick:function(){setShowSettings(false);},style:{background:"none",border:"none",color:DIM,fontSize:14,cursor:"pointer"}},"×")),
+      h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6}},"PALETTE"),
+      h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:12}},Object.keys(PALETTES).map(function(k){var p=PALETTES[k];return h("div",{key:k,onClick:function(){setPalName(k);localStorage.setItem("mycel_palette",k);},style:{padding:"3px 6px",borderRadius:4,background:palName===k?p.bg:"transparent",border:palName===k?"1.5px solid "+p.types.theory.a:"1px solid "+BRD,cursor:"pointer",display:"flex",alignItems:"center",gap:4}},h("div",{style:{width:8,height:8,borderRadius:"50%",background:p.types.theory.a}}),h("span",{style:{fontSize:9,color:palName===k?p.text:DIM}},p.name));})),
+      h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6}},"CONCEPT SHAPES"),
+      h("div",{style:{fontSize:11,color:MUT,lineHeight:1.6,marginBottom:8}},"Circle = theories",h("br",null),"Rectangle = definitions",h("br",null),"Diamond = arguments",h("br",null),"Hexagon = frameworks",h("br",null),"Pill = methods",h("br",null),"Rounded = examples"),
+      h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6,marginTop:8}},"LINE TYPES"),
+      h("div",{style:{fontSize:11,color:MUT,lineHeight:1.6,marginBottom:8}},"Solid = direct (IMPLIES, CAUSES)",h("br",null),"Dashed = structural (CONTAINS, PART_OF)",h("br",null),"Dotted = pedagogical (ILLUSTRATES)",h("br",null),"Thick = high confidence",h("br",null),"Thin = low confidence"),
+      h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6,marginTop:8}},"STYLE PRESETS"),
+      h("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
+        [["Academic","aurora"],["Neon","tokyo"],["Minimal","notion"],["Nordic","nord"],["Warm","paper"],["Cool","ice"],["Bold","dracula"]].map(function(pr){return h("button",{key:pr[0],onClick:function(){setPalName(pr[1]);localStorage.setItem("mycel_palette",pr[1]);},style:{padding:"3px 8px",borderRadius:4,fontSize:10,cursor:"pointer",background:palName===pr[1]?"rgba(162,155,254,0.15)":"transparent",border:"1px solid "+(palName===pr[1]?"rgba(162,155,254,0.3)":BRD),color:palName===pr[1]?"#A29BFE":DIM}},pr[0]);}))
+    ):null,
     /* Zoom */
     h("div",{key:"zm",style:{position:"absolute",bottom:10,right:10,display:"flex",alignItems:"center",gap:3,background:SURF+"EE",backdropFilter:"blur(8px)",padding:"4px 8px",borderRadius:8,border:"1px solid "+BRD,zIndex:5}},
       h("button",{onClick:function(){setCam(function(c){var rc=cRef.current?cRef.current.getBoundingClientRect():{width:800,height:600};var cx=rc.width/2,cy=rc.height/2;var nz=Math.max(0.15,c.z/1.3);return{x:cx-(cx-c.x)*(nz/c.z),y:cy-(cy-c.y)*(nz/c.z),z:nz};});},style:{width:32,height:32,borderRadius:6,background:"transparent",border:"1px solid "+BRD,color:TXT,fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"−"),
@@ -344,7 +359,14 @@ export default function App(){
   ]:[];
 
   var graphProps={ref:cRef,style:{flex:1,position:"relative",overflow:"hidden",cursor:cursor},onPointerDown:onDown,onPointerMove:onMove,onPointerUp:onUp,onPointerLeave:onUp,onWheel:onWheel,onDoubleClick:onDbl};
-  var graphView=view==='graph'?h("div",Object.assign({key:"gr"},graphProps),graphGuts):null;
+  var graphView=view==='graph'?(
+    referMode&&mapId
+      ?h("div",{key:"sp",style:{display:"flex",flex:1,overflow:"hidden"}},
+        h("div",{style:{flex:"0 0 50%",overflow:"hidden",borderRight:"1px solid "+BRD}},
+          h(PDFViewer,{pdfUrl:apiUrl()+"/api/maps/"+mapId+"/pdf",pdfFile:uploadedFile,nodes:vn,edges:ve,palette:P,selectedId:selId,onSelectConcept:function(id){setSel(id);zoomTo(id);},onClose:function(){setRefer(false);},darkMode:isDark,splitMode:true})),
+        h("div",Object.assign({key:"gr2"},graphProps),graphGuts))
+      :h("div",Object.assign({key:"gr"},graphProps),graphGuts)
+  ):null;
 
   /* ════════════════════════════════════════════════════ */
   return h("div",{style:{height:"100vh",display:"flex",flexDirection:"column",background:BG,color:TXT,fontFamily:"'Inter',system-ui,sans-serif"}},
