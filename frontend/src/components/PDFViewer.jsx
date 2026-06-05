@@ -33,6 +33,7 @@ export default function PDFViewer(props) {
   var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
   var _highlights = useState([]), highlights = _highlights[0], setHighlights = _highlights[1];
   var _hoveredNode = useState(null), hoveredNode = _hoveredNode[0], setHoveredNode = _hoveredNode[1];
+  var _ptext = useState({}), pageText = _ptext[0], setPageText = _ptext[1];
 
   var pdfContainerRef = useRef(null);
   var canvasRefs = useRef({});
@@ -85,6 +86,19 @@ export default function PDFViewer(props) {
         canvas.height = viewport.height;
         var ctx = canvas.getContext('2d');
         page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function() {
+          // Capture text layer (fractional coords) for highlighting + auto-linking
+          page.getTextContent().then(function(tc) {
+            var items = [];
+            for (var ti = 0; ti < tc.items.length; ti++) {
+              var it = tc.items[ti];
+              if (!it.str || !it.str.trim()) continue;
+              var tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+              var fh = Math.hypot(tx[2], tx[3]) || 10;
+              var x = tx[4], yTop = tx[5] - fh, w = (it.width || 0) * viewport.scale;
+              items.push({ str: it.str, fx: x / viewport.width, fy: yTop / viewport.height, fw: w / viewport.width, fh: fh / viewport.height });
+            }
+            setPageText(function(prev) { var n = Object.assign({}, prev); n[pageNum] = { items: items }; return n; });
+          }).catch(function() {});
           newPages.push({
             pageNum: pageNum,
             dataUrl: canvas.toDataURL(),
@@ -164,6 +178,33 @@ export default function PDFViewer(props) {
     return byPage;
   }, [nodes]);
 
+  // Highlight boxes for the selected concept (its label + source quote words)
+  var hlBoxes = function(pageNum) {
+    if (!selectedId) return [];
+    var node = null;
+    for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
+    if (!node) return [];
+    var pt = pageText[pageNum]; if (!pt) return [];
+    var hay = ((node.label || '') + ' ' + (node.source_quote || '')).toLowerCase();
+    var out = [];
+    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase(); if (w.length >= 3 && hay.indexOf(w) >= 0) out.push(it); });
+    return out;
+  };
+  // Auto-link: text occurrences of this page's concept labels become clickable
+  var linkBoxes = function(pageNum) {
+    var pt = pageText[pageNum]; if (!pt) return [];
+    var pageNodes = nodes.filter(function(n) { return (n.source_page || 0) === pageNum; });
+    if (!pageNodes.length) return [];
+    var out = [];
+    pt.items.forEach(function(it) {
+      var w = it.str.trim().toLowerCase(); if (w.length < 4) return;
+      for (var i = 0; i < pageNodes.length; i++) {
+        if ((pageNodes[i].label || '').toLowerCase().indexOf(w) >= 0) { out.push({ fx: it.fx, fy: it.fy, fw: it.fw, fh: it.fh, nodeId: pageNodes[i].id }); break; }
+      }
+    });
+    return out;
+  };
+
   // RENDER
   return h('div', { style: { display: 'flex', height: '100%', background: BG } },
 
@@ -207,7 +248,11 @@ export default function PDFViewer(props) {
                   // Highlight border when concept selected
                   isHighlighted ? h('div', { style: { position: 'absolute', inset: -3, border: '3px solid #A29BFE', borderRadius: 8, zIndex: 1, pointerEvents: 'none' } }) : null,
                   // Page image
-                  h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)' } }),
+                  h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', display: 'block' } }),
+                  // Text-layer overlay: concept highlights + clickable concept terms
+                  h('div', { style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: 'none' } },
+                    hlBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'h' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(162,155,254,0.38)', borderRadius: 2 } }); }),
+                    linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function() { if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px solid rgba(0,184,169,0.65)', cursor: 'pointer', pointerEvents: 'auto' } }); })),
                   // Concept markers for this page
                   conceptsByPage[page.pageNum]
                     ? h('div', { style: { position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 2 } },

@@ -35,6 +35,11 @@ export function postFeedback(category,content){return fetch(API+"/api/feedback",
 
 export function getStats(){return fetch(API+"/api/stats").then(function(r){return r.json();});}
 
+export function renameMap(id,title){return fetch(API+"/api/maps/"+id,{method:"PATCH",headers:ah(),body:JSON.stringify({title:title})}).then(function(r){return r.json();});}
+export function adminMaps(key){return fetch(API+"/api/admin/maps?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();});}
+export function adminUsers(key){return fetch(API+"/api/admin/users?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();});}
+export function adminStats(key){return fetch(API+"/api/admin/stats?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();}).catch(function(){return {};});}
+
 export function getPdfUrl(mapId) {
   var API = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:8000";
   return API + "/api/maps/" + mapId + "/pdf";
