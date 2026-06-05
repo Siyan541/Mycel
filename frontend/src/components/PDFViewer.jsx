@@ -16,6 +16,9 @@ export default function PDFViewer(props) {
   var palette = props.palette;
   var onClose = props.onClose;
   var darkMode = props.darkMode;
+  // panel: 'pdf' (PDF only), 'list' (concept list only), 'both' (side by side).
+  // Back-compat: splitMode:true means PDF only.
+  var panel = props.panel || (props.splitMode ? 'pdf' : 'both');
 
   var BG = darkMode ? '#0B1120' : '#F8F6F1';
   var SURF = darkMode ? '#131B2E' : '#FFFFFF';
@@ -36,6 +39,7 @@ export default function PDFViewer(props) {
 
   // Load PDF
   useEffect(function() {
+    if (panel === 'list') { setLoading(false); return; }
     if (typeof pdfjsLib === 'undefined') {
       console.error('pdf.js not loaded. Add the script tags to index.html');
       setLoading(false);
@@ -164,7 +168,8 @@ export default function PDFViewer(props) {
   return h('div', { style: { display: 'flex', height: '100%', background: BG } },
 
     // LEFT PANEL: PDF pages
-    h('div', { style: { flex: '0 0 50%', display: 'flex', flexDirection: 'column', borderRight: '1px solid ' + BRD } },
+    panel !== 'list' ?
+    h('div', { style: { flex: panel === 'both' ? '0 0 50%' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: panel === 'both' ? '1px solid ' + BRD : 'none' } },
       // PDF toolbar
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', background: SURF, borderBottom: '1px solid ' + BRD } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -225,11 +230,11 @@ export default function PDFViewer(props) {
                 );
               })
       )
-    ),
+    ) : null,
 
     // RIGHT PANEL: Concept list (organized by page)
-    !props.splitMode ?
-    h('div', { style: { flex: '0 0 50%', display: 'flex', flexDirection: 'column' } },
+    (panel === 'list' || panel === 'both') ?
+    h('div', { style: { flex: panel === 'both' ? '0 0 50%' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' } },
       // Panel header
       h('div', { style: { padding: '8px 14px', borderBottom: '1px solid ' + BRD, fontSize: 14, fontWeight: 600, color: TXT } }, 'Concepts'),
       // Concept list
