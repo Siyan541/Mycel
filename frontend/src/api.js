@@ -36,6 +36,8 @@ export function postFeedback(category,content){return fetch(API+"/api/feedback",
 export function getStats(){return fetch(API+"/api/stats").then(function(r){return r.json();});}
 
 export function renameMap(id,title){return fetch(API+"/api/maps/"+id,{method:"PATCH",headers:ah(),body:JSON.stringify({title:title})}).then(function(r){return r.json();});}
+export function generateMap(payload){return fetch(API+"/api/generate",{method:"POST",headers:ah(),body:JSON.stringify(payload)}).then(function(r){return r.json();});}
+export function socraticAsk(payload){return fetch(API+"/api/socratic",{method:"POST",headers:ah(),body:JSON.stringify(payload)}).then(function(r){return r.json();});}
 export function adminMaps(key){return fetch(API+"/api/admin/maps?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();});}
 export function adminUsers(key){return fetch(API+"/api/admin/users?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();});}
 export function adminStats(key){return fetch(API+"/api/admin/stats?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();}).catch(function(){return {};});}

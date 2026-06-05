@@ -19,6 +19,8 @@ export default function PDFViewer(props) {
   // panel: 'pdf' (PDF only), 'list' (concept list only), 'both' (side by side).
   // Back-compat: splitMode:true means PDF only.
   var panel = props.panel || (props.splitMode ? 'pdf' : 'both');
+  var annotations = props.annotations || [];
+  var onAnn = props.onAnn;  // setter: receives a function(prevArray) or array
 
   var BG = darkMode ? '#0B1120' : '#F8F6F1';
   var SURF = darkMode ? '#131B2E' : '#FFFFFF';
@@ -34,6 +36,10 @@ export default function PDFViewer(props) {
   var _highlights = useState([]), highlights = _highlights[0], setHighlights = _highlights[1];
   var _hoveredNode = useState(null), hoveredNode = _hoveredNode[0], setHoveredNode = _hoveredNode[1];
   var _ptext = useState({}), pageText = _ptext[0], setPageText = _ptext[1];
+  var _annOn = useState(false), annOn = _annOn[0], setAnnOn = _annOn[1];
+  var _annColor = useState('#FDCB6E'), annColor = _annColor[0], setAnnColor = _annColor[1];
+  var _editAnn = useState(null), editAnn = _editAnn[0], setEditAnn = _editAnn[1];
+  var _noteText = useState(''), noteText = _noteText[0], setNoteText = _noteText[1];
 
   var pdfContainerRef = useRef(null);
   var canvasRefs = useRef({});
@@ -152,20 +158,40 @@ export default function PDFViewer(props) {
     }
   }, [pdfDoc, pages.length]);
 
-  // When a concept is selected, scroll to its source page
+  var pageTextRef = useRef({});
+  useEffect(function() { pageTextRef.current = pageText; }, [pageText]);
+
+  // When a concept is selected: scroll to its page, then to the matched paragraph, and highlight it
   useEffect(function() {
     if (!selectedId) { setHighlights([]); return; }
     var node = null;
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].id === selectedId) { node = nodes[i]; break; }
-    }
+    for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
     if (node && node.source_page) {
       scrollToPage(node.source_page);
-      if (node.source_quote) {
-        setHighlights([{ page: node.source_page, text: node.source_quote }]);
-      }
+      if (node.source_quote) setHighlights([{ page: node.source_page, text: node.source_quote }]);
+      var pg = node.source_page;
+      var hay = ((node.label || '') + ' ' + (node.source_quote || '')).toLowerCase();
+      setTimeout(function() {
+        var cont = pdfContainerRef.current; if (!cont) return;
+        var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
+        var pt = pageTextRef.current[pg]; if (!pt) return;
+        var first = null;
+        for (var k = 0; k < pt.items.length; k++) { var w = pt.items[k].str.trim().toLowerCase(); if (w.length >= 3 && hay.indexOf(w) >= 0) { first = pt.items[k]; break; } }
+        if (first) { var top = pageEl.offsetTop + first.fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+      }, 650);
     }
   }, [selectedId, nodes, scrollToPage]);
+
+  // Add / toggle a highlight on a clicked text item
+  var toggleAnnotation = function(pageNum, box) {
+    if (!onAnn) return;
+    onAnn(function(prev) {
+      var hit = -1;
+      for (var i = 0; i < prev.length; i++) { if (prev[i].page === pageNum && Math.abs(prev[i].fx - box.fx) < 0.005 && Math.abs(prev[i].fy - box.fy) < 0.01) { hit = i; break; } }
+      if (hit >= 0) return prev.filter(function(a, idx) { return idx !== hit; });
+      return prev.concat([{ id: 'ann_' + Date.now() + '_' + Math.floor(Math.random() * 999), page: pageNum, fx: box.fx, fy: box.fy, fw: box.fw, fh: box.fh, color: annColor, note: '' }]);
+    });
+  };
 
   // Build concept list grouped by page
   var conceptsByPage = useMemo(function() {
@@ -218,7 +244,9 @@ export default function PDFViewer(props) {
           h('span', { style: { fontSize: 13, color: DIM } },
             pdfDoc ? ('Page ' + currentPage + ' / ' + pdfDoc.numPages) : 'Loading...')
         ),
-        h('div', { style: { display: 'flex', gap: 4 } },
+        h('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
+          onAnn ? h('button', { title: 'Highlight & note mode', onClick: function() { setAnnOn(!annOn); }, style: { padding: '4px 10px', background: annOn ? 'rgba(253,203,110,0.18)' : 'transparent', border: '1px solid ' + (annOn ? '#FDCB6E' : BRD), borderRadius: 6, color: annOn ? '#FDCB6E' : DIM, fontSize: 12, cursor: 'pointer', fontWeight: 600 } }, 'Annotate') : null,
+          (onAnn && annOn) ? ['#FDCB6E', '#FF8FA3', '#7DE2D1', '#A29BFE'].map(function(c) { return h('div', { key: c, onClick: function() { setAnnColor(c); }, style: { width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', outline: annColor === c ? '2px solid ' + TXT : 'none', outlineOffset: 1 } }); }) : null,
           h('button', { onClick: function() { setScale(function(s) { return Math.max(0.5, s - 0.2); }); }, style: { padding: '4px 10px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: TXT, fontSize: 16, cursor: 'pointer' } }, '−'),
           h('span', { style: { fontSize: 12, color: DIM, padding: '4px 8px' } }, Math.round(scale * 100) + '%'),
           h('button', { onClick: function() { setScale(function(s) { return Math.min(3, s + 0.2); }); }, style: { padding: '4px 10px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: TXT, fontSize: 16, cursor: 'pointer' } }, '+')
@@ -249,10 +277,16 @@ export default function PDFViewer(props) {
                   isHighlighted ? h('div', { style: { position: 'absolute', inset: -3, border: '3px solid #A29BFE', borderRadius: 8, zIndex: 1, pointerEvents: 'none' } }) : null,
                   // Page image
                   h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', display: 'block' } }),
-                  // Text-layer overlay: concept highlights + clickable concept terms
+                  // Text-layer overlay: concept highlights + clickable concept terms + user annotations
                   h('div', { style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: 'none' } },
+                    // user highlight annotations (persisted)
+                    annotations.filter(function(a) { return a.page === page.pageNum; }).map(function(a) { return h('div', { key: a.id, title: a.note ? a.note : 'Click to add a note', onClick: function() { if (annOn) { setEditAnn(a); setNoteText(a.note || ''); } }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 100) + '%', background: a.color + '66', borderBottom: '2px solid ' + a.color, borderRadius: 2, cursor: annOn ? 'pointer' : 'default', pointerEvents: annOn ? 'auto' : 'none' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: a.color, border: '1px solid ' + SURF } }) : null); }),
+                    // concept highlight (selected concept's words)
                     hlBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'h' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(162,155,254,0.38)', borderRadius: 2 } }); }),
-                    linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function() { if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px solid rgba(0,184,169,0.65)', cursor: 'pointer', pointerEvents: 'auto' } }); })),
+                    // annotate mode: click any word to highlight it
+                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function() { toggleAnnotation(page.pageNum, it); }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
+                    // auto-link: concept labels found in the page are clickable
+                    !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function() { if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px solid rgba(0,184,169,0.65)', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null),
                   // Concept markers for this page
                   conceptsByPage[page.pageNum]
                     ? h('div', { style: { position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 2 } },
@@ -277,7 +311,17 @@ export default function PDFViewer(props) {
       )
     ) : null,
 
-    // RIGHT PANEL: Concept list (organized by page)
+    // Note editor for a clicked highlight
+    editAnn ? h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }, onClick: function() { setEditAnn(null); } },
+      h('div', { onClick: function(e) { e.stopPropagation(); }, style: { width: 300, background: SURF, border: '1px solid ' + BRD, borderRadius: 14, padding: 16 } },
+        h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8, color: TXT } }, 'Note'),
+        h('textarea', { value: noteText, autoFocus: true, placeholder: 'Write a note for this highlight…', rows: 4, onChange: function(e) { setNoteText(e.target.value); }, style: { width: '100%', padding: 8, background: BG, border: '1px solid ' + BRD, borderRadius: 8, color: TXT, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 8 } }),
+        h('div', { style: { display: 'flex', gap: 6 } },
+          h('button', { onClick: function() { var id = editAnn.id; var nt = noteText; if (onAnn) onAnn(function(prev) { return prev.map(function(a) { return a.id === id ? Object.assign({}, a, { note: nt }) : a; }); }); setEditAnn(null); }, style: { flex: 2, padding: '8px 0', background: 'rgba(162,155,254,0.15)', border: '1px solid rgba(162,155,254,0.4)', borderRadius: 8, color: '#A29BFE', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' } }, 'Save'),
+          h('button', { onClick: function() { var id = editAnn.id; if (onAnn) onAnn(function(prev) { return prev.filter(function(a) { return a.id !== id; }); }); setEditAnn(null); }, style: { flex: 1, padding: '8px 0', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 8, color: '#FF6B6B', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' } }, 'Delete'))
+      )
+    ) : null,
+
     (panel === 'list' || panel === 'both') ?
     h('div', { style: { flex: panel === 'both' ? '0 0 50%' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' } },
       // Panel header
