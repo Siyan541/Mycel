@@ -21,6 +21,7 @@ export default function PDFViewer(props) {
   var panel = props.panel || (props.splitMode ? 'pdf' : 'both');
   var annotations = props.annotations || [];
   var onAnn = props.onAnn;  // setter: receives a function(prevArray) or array
+  var focusEdge = props.focusEdge;  // {sourceLabel,targetLabel,source_page} to explain a relation
 
   var BG = darkMode ? '#0B1120' : '#F8F6F1';
   var SURF = darkMode ? '#131B2E' : '#FFFFFF';
@@ -170,17 +171,32 @@ export default function PDFViewer(props) {
       scrollToPage(node.source_page);
       if (node.source_quote) setHighlights([{ page: node.source_page, text: node.source_quote }]);
       var pg = node.source_page;
-      var hay = ((node.label || '') + ' ' + (node.source_quote || '')).toLowerCase();
       setTimeout(function() {
         var cont = pdfContainerRef.current; if (!cont) return;
         var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
-        var pt = pageTextRef.current[pg]; if (!pt) return;
-        var first = null;
-        for (var k = 0; k < pt.items.length; k++) { var w = pt.items[k].str.trim().toLowerCase(); if (w.length >= 3 && hay.indexOf(w) >= 0) { first = pt.items[k]; break; } }
-        if (first) { var top = pageEl.offsetTop + first.fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+        var boxes = hlBoxes(pg);
+        if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
       }, 650);
     }
   }, [selectedId, nodes, scrollToPage]);
+
+  // When a relation is focused: scroll to where its endpoints appear
+  useEffect(function() {
+    if (!focusEdge) return;
+    var pg = focusEdge.source_page || (function() { for (var i = 0; i < nodes.length; i++) { } return null; })();
+    // pick the first page that has any matching token
+    var targetPage = focusEdge.source_page || null;
+    if (!targetPage) { var keys = Object.keys(pageTextRef.current); for (var k = 0; k < keys.length; k++) { if (relBoxes(parseInt(keys[k])).length) { targetPage = parseInt(keys[k]); break; } } }
+    if (targetPage) {
+      scrollToPage(targetPage);
+      setTimeout(function() {
+        var cont = pdfContainerRef.current; if (!cont) return;
+        var pageEl = cont.querySelector('[data-page="' + targetPage + '"]'); if (!pageEl) return;
+        var boxes = relBoxes(targetPage);
+        if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+      }, 650);
+    }
+  }, [focusEdge, scrollToPage]);
 
   // Add / toggle a highlight on a clicked text item
   var toggleAnnotation = function(pageNum, box) {
@@ -189,8 +205,20 @@ export default function PDFViewer(props) {
       var hit = -1;
       for (var i = 0; i < prev.length; i++) { if (prev[i].page === pageNum && Math.abs(prev[i].fx - box.fx) < 0.005 && Math.abs(prev[i].fy - box.fy) < 0.01) { hit = i; break; } }
       if (hit >= 0) return prev.filter(function(a, idx) { return idx !== hit; });
-      return prev.concat([{ id: 'ann_' + Date.now() + '_' + Math.floor(Math.random() * 999), page: pageNum, fx: box.fx, fy: box.fy, fw: box.fw, fh: box.fh, color: annColor, note: '' }]);
+      return prev.concat([{ id: 'ann_' + Date.now() + '_' + Math.floor(Math.random() * 999), page: pageNum, kind: 'mark', fx: box.fx, fy: box.fy, fw: box.fw, fh: box.fh, color: annColor, note: '' }]);
     });
+  };
+  // Drop a free note pin on empty space (comment)
+  var addPin = function(pageNum, fx, fy) {
+    if (!onAnn) return;
+    var id = 'note_' + Date.now() + '_' + Math.floor(Math.random() * 999);
+    onAnn(function(prev) { return prev.concat([{ id: id, page: pageNum, kind: 'note', fx: fx, fy: fy, fw: 0.02, fh: 0.02, color: annColor, note: '' }]); });
+    setTimeout(function() { setEditAnn({ id: id, note: '' }); setNoteText(''); }, 0);
+  };
+  // Live-update a note as the user types (auto-save)
+  var liveNote = function(id, text) {
+    setNoteText(text);
+    if (onAnn) onAnn(function(prev) { return prev.map(function(a) { return a.id === id ? Object.assign({}, a, { note: text }) : a; }); });
   };
 
   // Build concept list grouped by page
@@ -204,29 +232,56 @@ export default function PDFViewer(props) {
     return byPage;
   }, [nodes]);
 
-  // Highlight boxes for the selected concept (its label + source quote words)
+  // ── Explainable highlighting ──────────────────────────────
+  var STOP = { the:1,a:1,an:1,of:1,to:1,in:1,on:1,and:1,or:1,is:1,are:1,was:1,were:1,be:1,by:1,for:1,with:1,as:1,at:1,it:1,its:1,this:1,that:1,these:1,those:1,from:1,which:1,we:1,can:1,will:1,not:1,but:1,if:1,then:1,so:1,such:1,into:1,than:1,also:1,may:1,each:1,any:1,all:1,one:1,two:1,their:1,they:1,has:1,have:1,had:1,where:1,when:1,how:1,what:1,more:1,most:1,some:1,other:1,using:1,used:1,use:1,between:1,within:1,about:1 };
+  var sigTokens = function(s) { var out = []; (s || '').toLowerCase().split(/[^a-z0-9]+/).forEach(function(w) { if (w.length >= 4 && !STOP[w]) out.push(w); }); return out; };
+  // Find the run of items that spans a quote phrase (so we highlight the sentence, not "the")
+  var quoteSpan = function(pt, quote) {
+    if (!quote) return [];
+    var norm = quote.toLowerCase().replace(/\s+/g, ' ').trim();
+    var probe = norm.slice(0, Math.min(norm.length, 50));
+    var concat = '', map = [];
+    for (var i = 0; i < pt.items.length; i++) { var s = pt.items[i].str.toLowerCase(); for (var c = 0; c < s.length; c++) { concat += s[c]; map.push(i); } concat += ' '; map.push(i); }
+    var idx = concat.indexOf(probe);
+    if (idx < 0) return [];
+    var endChar = Math.min(idx + Math.max(probe.length, norm.length) - 1, map.length - 1);
+    var a = map[idx], b = map[endChar], boxes = [];
+    for (var k = a; k <= b && k < pt.items.length; k++) boxes.push(pt.items[k]);
+    return boxes;
+  };
+  // Boxes for the selected concept: prefer its quoted sentence, else its significant label words
   var hlBoxes = function(pageNum) {
     if (!selectedId) return [];
     var node = null;
     for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
     if (!node) return [];
     var pt = pageText[pageNum]; if (!pt) return [];
-    var hay = ((node.label || '') + ' ' + (node.source_quote || '')).toLowerCase();
+    if (node.source_quote) { var span = quoteSpan(pt, node.source_quote); if (span.length) return span; }
+    var toks = sigTokens(node.label); if (!toks.length) return [];
     var out = [];
-    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase(); if (w.length >= 3 && hay.indexOf(w) >= 0) out.push(it); });
+    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length >= 4 && toks.indexOf(w) >= 0) out.push(it); });
     return out;
   };
-  // Auto-link: text occurrences of this page's concept labels become clickable
+  // Boxes for a focused relation: where its two endpoints' significant words appear
+  var relBoxes = function(pageNum) {
+    if (!focusEdge) return [];
+    var pt = pageText[pageNum]; if (!pt) return [];
+    var toks = sigTokens(focusEdge.sourceLabel).concat(sigTokens(focusEdge.targetLabel));
+    if (!toks.length) return [];
+    var out = [];
+    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length >= 4 && toks.indexOf(w) >= 0) out.push(it); });
+    return out;
+  };
+  // Auto-link: only whole significant label words are clickable (not "the")
   var linkBoxes = function(pageNum) {
     var pt = pageText[pageNum]; if (!pt) return [];
     var pageNodes = nodes.filter(function(n) { return (n.source_page || 0) === pageNum; });
     if (!pageNodes.length) return [];
+    var toksByNode = pageNodes.map(function(n) { return { id: n.id, toks: sigTokens(n.label) }; });
     var out = [];
     pt.items.forEach(function(it) {
-      var w = it.str.trim().toLowerCase(); if (w.length < 4) return;
-      for (var i = 0; i < pageNodes.length; i++) {
-        if ((pageNodes[i].label || '').toLowerCase().indexOf(w) >= 0) { out.push({ fx: it.fx, fy: it.fy, fw: it.fw, fh: it.fh, nodeId: pageNodes[i].id }); break; }
-      }
+      var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length < 4) return;
+      for (var i = 0; i < toksByNode.length; i++) { if (toksByNode[i].toks.indexOf(w) >= 0) { out.push({ fx: it.fx, fy: it.fy, fw: it.fw, fh: it.fh, nodeId: toksByNode[i].id }); break; } }
     });
     return out;
   };
@@ -277,16 +332,21 @@ export default function PDFViewer(props) {
                   isHighlighted ? h('div', { style: { position: 'absolute', inset: -3, border: '3px solid #A29BFE', borderRadius: 8, zIndex: 1, pointerEvents: 'none' } }) : null,
                   // Page image
                   h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', display: 'block' } }),
-                  // Text-layer overlay: concept highlights + clickable concept terms + user annotations
-                  h('div', { style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: 'none' } },
-                    // user highlight annotations (persisted)
-                    annotations.filter(function(a) { return a.page === page.pageNum; }).map(function(a) { return h('div', { key: a.id, title: a.note ? a.note : 'Click to add a note', onClick: function() { if (annOn) { setEditAnn(a); setNoteText(a.note || ''); } }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 100) + '%', background: a.color + '66', borderBottom: '2px solid ' + a.color, borderRadius: 2, cursor: annOn ? 'pointer' : 'default', pointerEvents: annOn ? 'auto' : 'none' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: a.color, border: '1px solid ' + SURF } }) : null); }),
-                    // concept highlight (selected concept's words)
-                    hlBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'h' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(162,155,254,0.38)', borderRadius: 2 } }); }),
-                    // annotate mode: click any word to highlight it
-                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function() { toggleAnnotation(page.pageNum, it); }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
-                    // auto-link: concept labels found in the page are clickable
-                    !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function() { if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px solid rgba(0,184,169,0.65)', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null),
+                  // Text-layer overlay: concept/relation highlights + clickable terms + user annotations
+                  h('div', { onClick: function(e) { if (annOn && e.target === e.currentTarget) { var r = e.currentTarget.getBoundingClientRect(); addPin(page.pageNum, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); } }, style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: annOn ? 'auto' : 'none', cursor: annOn ? 'crosshair' : 'default' } },
+                    // concept highlight (selected concept's sentence/words)
+                    hlBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'h' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(162,155,254,0.30)', borderBottom: '2px solid #A29BFE', borderRadius: 2, pointerEvents: 'none' } }); }),
+                    // relation highlight (focused link's endpoints)
+                    relBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'r' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(0,184,169,0.26)', borderBottom: '2px solid #00B8A9', borderRadius: 2, pointerEvents: 'none' } }); }),
+                    // user annotations: marks (bands) + note pins
+                    annotations.filter(function(a) { return a.page === page.pageNum; }).map(function(a) {
+                      if (a.kind === 'note') return h('div', { key: a.id, title: a.note || 'Note', onClick: function(e) { e.stopPropagation(); setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: 18, height: 18, marginLeft: -9, marginTop: -9, borderRadius: '50% 50% 50% 2px', background: a.color, cursor: 'pointer', pointerEvents: 'auto', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' } });
+                      return h('div', { key: a.id, title: a.note ? a.note : 'Click to add a note', onClick: function(e) { e.stopPropagation(); if (annOn) { setEditAnn(a); setNoteText(a.note || ''); } }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 100) + '%', background: a.color + '66', borderBottom: '2px solid ' + a.color, borderRadius: 2, cursor: annOn ? 'pointer' : 'default', pointerEvents: annOn ? 'auto' : 'none' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: a.color, border: '1px solid ' + SURF } }) : null);
+                    }),
+                    // annotate mode: click a word to highlight it
+                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function(e) { e.stopPropagation(); toggleAnnotation(page.pageNum, it); }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
+                    // auto-link: significant concept labels found in the page are clickable
+                    !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function(e) { e.stopPropagation(); if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px dashed rgba(0,184,169,0.6)', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null),
                   // Concept markers for this page
                   conceptsByPage[page.pageNum]
                     ? h('div', { style: { position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 2 } },
@@ -314,10 +374,10 @@ export default function PDFViewer(props) {
     // Note editor for a clicked highlight
     editAnn ? h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }, onClick: function() { setEditAnn(null); } },
       h('div', { onClick: function(e) { e.stopPropagation(); }, style: { width: 300, background: SURF, border: '1px solid ' + BRD, borderRadius: 14, padding: 16 } },
-        h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8, color: TXT } }, 'Note'),
-        h('textarea', { value: noteText, autoFocus: true, placeholder: 'Write a note for this highlight…', rows: 4, onChange: function(e) { setNoteText(e.target.value); }, style: { width: '100%', padding: 8, background: BG, border: '1px solid ' + BRD, borderRadius: 8, color: TXT, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 8 } }),
+        h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8, color: TXT } }, 'Note (saves automatically)'),
+        h('textarea', { value: noteText, autoFocus: true, placeholder: 'Type your comment…', rows: 4, onChange: function(e) { liveNote(editAnn.id, e.target.value); }, style: { width: '100%', padding: 8, background: BG, border: '1px solid ' + BRD, borderRadius: 8, color: TXT, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 8 } }),
         h('div', { style: { display: 'flex', gap: 6 } },
-          h('button', { onClick: function() { var id = editAnn.id; var nt = noteText; if (onAnn) onAnn(function(prev) { return prev.map(function(a) { return a.id === id ? Object.assign({}, a, { note: nt }) : a; }); }); setEditAnn(null); }, style: { flex: 2, padding: '8px 0', background: 'rgba(162,155,254,0.15)', border: '1px solid rgba(162,155,254,0.4)', borderRadius: 8, color: '#A29BFE', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' } }, 'Save'),
+          h('button', { onClick: function() { setEditAnn(null); }, style: { flex: 2, padding: '8px 0', background: 'rgba(162,155,254,0.15)', border: '1px solid rgba(162,155,254,0.4)', borderRadius: 8, color: '#A29BFE', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' } }, 'Done'),
           h('button', { onClick: function() { var id = editAnn.id; if (onAnn) onAnn(function(prev) { return prev.filter(function(a) { return a.id !== id; }); }); setEditAnn(null); }, style: { flex: 1, padding: '8px 0', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 8, color: '#FF6B6B', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' } }, 'Delete'))
       )
     ) : null,
