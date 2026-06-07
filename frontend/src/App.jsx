@@ -61,6 +61,24 @@ function shapeEl(shape,w,hh,attrs){
 var REL_TYPES=["IMPLIES","REQUIRES","CONTRADICTS","EQUIVALENT","GENERALIZES","SPECIALIZES","PART_OF","CONTAINS","INSTANCE_OF","DEFINED_BY","PREREQUISITE_FOR","ILLUSTRATES","EXTENDS","CONTRASTS_WITH","CAUSES","ENABLES","CONSTRAINS","ANALOGOUS_TO"];
 var BASE_TYPES=["theory","principle","definition","method","example","evidence","argument","term","framework","phenomenon"];
 
+/* ── Turn backend-extracted media (per-concept image/formula/table, or top-level figures) into content blocks ── */
+function extractMediaCards(laid, r) {
+  var out = [];
+  (laid || []).forEach(function(n) {
+    var nx = n.x + (n.w ? n.w / 2 : 60) + 120, ny = n.y;
+    if (n.image) out.push({ id: 'm_' + n.id + '_img', kind: 'image', src: n.image, x: nx, y: ny, w: 180, h: 130, concept: n.id });
+    if (n.formula) out.push({ id: 'm_' + n.id + '_f', kind: 'formula', text: n.formula, x: nx, y: ny + 80, w: 210, h: 66, concept: n.id });
+    if (n.table && n.table.length) out.push({ id: 'm_' + n.id + '_t', kind: 'table', rows: n.table, x: nx, y: ny + 150, w: Math.max(160, (n.table[0] ? n.table[0].length : 2) * 92), h: Math.max(70, n.table.length * 26 + 10), concept: n.id });
+  });
+  var extra = r.figures || r.media || r.tables || [];
+  extra.forEach(function(m, i) {
+    if (m.image || m.src) out.push({ id: 'mf_' + i, kind: 'image', src: m.image || m.src, x: -320, y: -220 + i * 150, w: 180, h: 130 });
+    else if (m.formula) out.push({ id: 'mf_' + i, kind: 'formula', text: m.formula, x: -320, y: -220 + i * 90, w: 210, h: 66 });
+    else if (m.rows || m.table) out.push({ id: 'mf_' + i, kind: 'table', rows: m.rows || m.table, x: -320, y: -220 + i * 120, w: 200, h: 90 });
+  });
+  return out;
+}
+
 /* ── Content-block renderer (image · formula · table · text) ── */
 function blockEls(c,TXT,DIM,BRD){
   if(c.kind==='formula')return[h("text",{key:"f",x:0,y:0,textAnchor:"middle",dominantBaseline:"central",fontSize:18,fontStyle:"italic",fontFamily:"'Cambria','Georgia','Times New Roman',serif",fill:TXT,style:{pointerEvents:"none"}},c.text||"")];
@@ -213,6 +231,7 @@ export default function App(){
   var _cardDrag=useState(null),cardDrag=_cardDrag[0],setCardDrag=_cardDrag[1];
   /* ── Authoring modes (A guided · B socratic · C manual · D sketch; full=default) ── */
   var _bmode=useState(null),builderMode=_bmode[0],setBuilderMode=_bmode[1];
+  var _pmode=useState("auto"),pendingMode=_pmode[0],setPendingMode=_pmode[1];
   var _modePick=useState(false),modePick=_modePick[0],setModePick=_modePick[1];
   var _gOpen=useState(false),guidedOpen=_gOpen[0],setGuidedOpen=_gOpen[1];
   var _gTopic=useState(""),gTopic=_gTopic[0],setGTopic=_gTopic[1];
@@ -223,21 +242,19 @@ export default function App(){
   var _socStep=useState(0),socStep=_socStep[0],setSocStep=_socStep[1];
   var _socInput=useState(""),socInput=_socInput[0],setSocInput=_socInput[1];
   var _socFocus=useState(null),socFocus=_socFocus[0],setSocFocus=_socFocus[1];
+  var _socRel=useState("IMPLIES"),socRel=_socRel[0],setSocRel=_socRel[1];
+  var _socWhy=useState(""),socWhy=_socWhy[0],setSocWhy=_socWhy[1];
   var _structOpen=useState(false),structOpen=_structOpen[0],setStructOpen=_structOpen[1];
   var _stLabel=useState(""),stLabel=_stLabel[0],setStLabel=_stLabel[1];
   var _stType=useState("term"),stType=_stType[0],setStType=_stType[1];
   var _stDesc=useState(""),stDesc=_stDesc[0],setStDesc=_stDesc[1];
-  /* ── Study / exposure modes (full · skeleton · grow · review) ── */
+  /* ── Study / exposure modes (full · grow · review · soil) ── */
   var _study=useState("full"),studyMode=_study[0],setStudyMode=_study[1];
   var _studyOpen=useState(false),studyOpen=_studyOpen[0],setStudyOpen=_studyOpen[1];
-  var _parked=useState(null),parkedIds=_parked[0],setParkedIds=_parked[1];
-  var _skf=useState(0.4),skeletonFrac=_skf[0],setSkeletonFrac=_skf[1];
-  var _growN=useState(0),growN=_growN[0],setGrowN=_growN[1];
+  var _growStep=useState(0),growStep=_growStep[0],setGrowStep=_growStep[1];
   var _growPlay=useState(false),growPlay=_growPlay[0],setGrowPlay=_growPlay[1];
-  var _growPred=useState(true),growPred=_growPred[0],setGrowPred=_growPred[1];
+  var _growSpeed=useState(900),growSpeed=_growSpeed[0],setGrowSpeed=_growSpeed[1];
   var _revealed=useState(null),revealed=_revealed[0],setRevealed=_revealed[1];
-  var _navFocus=useState(null),navFocus=_navFocus[0],setNavFocus=_navFocus[1];
-  var _navPath=useState([]),navPath=_navPath[0],setNavPath=_navPath[1];
   var _soilLinks=useState(false),soilLinks=_soilLinks[0],setSoilLinks=_soilLinks[1];
   var _focusEdge=useState(null),focusEdge=_focusEdge[0],setFocusEdge=_focusEdge[1];
   var _fullscreen=useState(false),fullscreen=_fullscreen[0],setFullscreen=_fullscreen[1];
@@ -310,19 +327,26 @@ export default function App(){
   var setPdfAnn=function(fn){setData(function(d){var cur=d.pdfAnn||[];return Object.assign({},d,{pdfAnn:typeof fn==='function'?fn(cur):fn});});};
 
   /* ── Study / exposure-mode computations ── */
-  var growOrder=useMemo(function(){var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});return nodes.slice().sort(function(a,b){var la=a.abstraction_level==null?1:a.abstraction_level,lb=b.abstraction_level==null?1:b.abstraction_level;if(la!==lb)return la-lb;return (dg[b.id]||0)-(dg[a.id]||0);});},[nodes,edges]);
+  var growEvents=useMemo(function(){
+    var SYM={CONTRADICTS:1,EQUIVALENT:1,ANALOGOUS_TO:1,CONTRASTS_WITH:1,RELATED:1,RELATED_TO:1};
+    var adj={};nodes.forEach(function(n){adj[n.id]=[];});
+    edges.forEach(function(e,i){if(adj[e.source]&&adj[e.target]){adj[e.source].push({o:e.target,e:e});adj[e.target].push({o:e.source,e:e});}});
+    var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});
+    var order=nodes.slice().sort(function(a,b){return (dg[b.id]||0)-(dg[a.id]||0);});
+    var visited={},shown={},events=[];
+    function ek(e){return e.source+'>'+e.target+'>'+e.relation_type;}
+    order.forEach(function(root){
+      if(visited[root.id])return;visited[root.id]=1;events.push({k:'n',id:root.id});var q=[root.id];
+      while(q.length){var cur=q.shift();(adj[cur]||[]).forEach(function(l){var k=ek(l.e);if(!visited[l.o]){var sym=SYM[(l.e.relation_type||'').toUpperCase()];if(sym){events.push({k:'n',id:l.o});if(!shown[k]){events.push({k:'e',key:k});shown[k]=1;}}else{if(!shown[k]){events.push({k:'e',key:k});shown[k]=1;}events.push({k:'n',id:l.o});}visited[l.o]=1;q.push(l.o);}else if(!shown[k]){events.push({k:'e',key:k});shown[k]=1;}});}
+    });
+    return events;
+  },[nodes,edges]);
   var enterStudy=function(m){
     setStudyMode(m);setStudyOpen(true);setSel(null);
-    if(m==='skeleton'){var lvl=user?(user.points||0):0;var frac=lvl>=300?0.25:(lvl>=75?0.35:0.45);setSkeletonFrac(frac);var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});var sorted=nodes.slice().sort(function(a,b){return (dg[a.id]||0)-(dg[b.id]||0);});var k=Math.floor(nodes.length*frac);var pk=new Set();for(var i=0;i<k;i++)pk.add(sorted[i].id);setParkedIds(pk);}
-    else setParkedIds(null);
-    if(m==='grow'){setGrowN(Math.min(1,nodes.length));setGrowPlay(false);}
+    if(m==='grow'){setGrowStep(0);setGrowPlay(true);}
     if(m==='review'){setRevealed(new Set());}
-    if(m==='navigate'){var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});var best=null,bd=-1;nodes.forEach(function(n){var d=dg[n.id]||0;if(d>bd){bd=d;best=n.id;}});setNavFocus(best);setNavPath(best?[best]:[]);if(best)setTimeout(function(){zoomTo(best);},60);}
-    if(m==='soil'){setSoilLinks(false);}
+    if(m==='soil'){setSoilLinks(false);setTimeout(function(){fit(nodes);},30);}
   };
-  var walkTo=function(id){setNavFocus(id);setNavPath(function(p){var arr=p.slice();if(arr[arr.length-1]!==id)arr.push(id);return arr.slice(-12);});setSel(id);setTimeout(function(){zoomTo(id);},10);};
-  var walkBack=function(){setNavPath(function(p){if(p.length<2)return p;var arr=p.slice(0,-1);var prev=arr[arr.length-1];setNavFocus(prev);setTimeout(function(){zoomTo(prev);},10);return arr;});};
-  var reparkSkeleton=function(frac){setSkeletonFrac(frac);var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});var sorted=nodes.slice().sort(function(a,b){return (dg[a.id]||0)-(dg[b.id]||0);});var k=Math.floor(nodes.length*frac);var pk=new Set();for(var i=0;i<k;i++)pk.add(sorted[i].id);setParkedIds(pk);};
 
   /* ── Effects ── */
   useEffect(function(){var uid=localStorage.getItem("mycel_uid");if(uid)getMe().then(function(d){if(d.user)setUser(d.user);}).catch(function(){});},[]);
@@ -334,7 +358,7 @@ export default function App(){
   useEffect(function(){localStorage.setItem("mycel_ctypes",JSON.stringify(customTypes));},[customTypes]);
   useEffect(function(){localStorage.setItem("mycel_crels",JSON.stringify(customRels));},[customRels]);
   useEffect(function(){if(showOnboard)setObStep(0);},[showOnboard]);
-  useEffect(function(){if(studyMode!=='grow'||!growPlay)return;if(growN>=nodes.length){setGrowPlay(false);return;}var id=setTimeout(function(){setGrowN(function(g){return Math.min(nodes.length,g+1);});},1100);return function(){clearTimeout(id);};},[growPlay,growN,studyMode,nodes.length]);
+  useEffect(function(){if(studyMode!=='grow'||!growPlay)return;if(growStep>=growEvents.length){setGrowPlay(false);return;}var id=setTimeout(function(){setGrowStep(function(g){return Math.min(growEvents.length,g+1);});},Math.max(150,growSpeed));return function(){clearTimeout(id);};},[growPlay,growStep,studyMode,growSpeed,growEvents.length]);
   useEffect(function(){if(view==="admin"&&adminKey){adminUsers(adminKey).then(function(u){adminMaps(adminKey).then(function(m){adminStats(adminKey).then(function(s){setAdminData({users:u.users||u||[],maps:m.maps||m||[],stats:s||{}});}).catch(function(){setAdminData({users:u.users||[],maps:m.maps||[],stats:{}});});}).catch(function(){});}).catch(function(){setAdminData({error:true});});}},[view,adminKey]);
   useEffect(function(){
     function fn(e){
@@ -362,17 +386,31 @@ export default function App(){
     setCam({x:-(ax-60)*z+(rc.width-gw*z)/2,y:-(ay-60)*z+(rc.height-gh*z)/2,z:z});
   },[]);
 
-  var zoomTo=function(nid){var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();setCam({x:-n.x*2.5+rc.width/2,y:-n.y*2.5+rc.height/2,z:2.5});setSel(nid);};
+  var camAnim=useRef(null);
+  var animateCam=function(target){
+    if(camAnim.current)cancelAnimationFrame(camAnim.current);
+    var start={x:cam.x,y:cam.y,z:cam.z},t0=(typeof performance!=='undefined'?performance.now():Date.now()),dur=700;
+    var ease=function(p){return p<0.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;};
+    function frame(now){var p=Math.min(1,(now-t0)/dur);var e=ease(p);setCam({x:start.x+(target.x-start.x)*e,y:start.y+(target.y-start.y)*e,z:start.z+(target.z-start.z)*e});if(p<1)camAnim.current=requestAnimationFrame(frame);else camAnim.current=null;}
+    camAnim.current=requestAnimationFrame(frame);
+  };
+  var zoomTo=function(nid){var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();var z=Math.max(1.6,Math.min(cam.z,2.5));animateCam({x:-n.x*z+rc.width/2,y:-n.y*z+rc.height/2,z:z});setSel(nid);};
 
+  var applyPendingMode=function(){
+    var m=pendingMode||'auto';setStudyMode('full');setSocOpen(false);setStructOpen(false);setBuilderMode(m);
+    if(m==='socratic'){setSocStep(0);setSocInput("");setSocFocus(null);setTimeout(function(){setSocOpen(true);},400);}
+    else if(m==='manual'){setTimeout(function(){setStructOpen(true);},400);}
+  };
   var handleUpload=function(file){
     if(!file)return;setUpFile(file);
     setUpl(true);setProg({stage:'uploading',progress:0,message:'Uploading...'});
     uploadPDF(file).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
-        var laid=organicLayout(r.nodes,edgesN);dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:(r.cards||[]),pdfAnn:(r.pdfAnn||r.pdf_ann||[])}});
+        var laid=organicLayout(r.nodes,edgesN);dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:(r.cards||[]).concat(extractMediaCards(laid,r)),pdfAnn:(r.pdfAnn||r.pdf_ann||[])}});
         setMapId(r.map_id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
         setProg({stage:'done',progress:1,message:r.node_count+' concepts, '+r.edge_count+' relations'});
+        applyPendingMode();
       }else{setProg({stage:'error',progress:0,message:r.error||'Upload failed'});}
       setUpl(false);
     }).catch(function(e){setProg({stage:'error',progress:0,message:e.message||'Failed'});setUpl(false);});
@@ -388,10 +426,10 @@ export default function App(){
     var nn={id:'n_'+Date.now(),label:'New Concept',description:'Click to edit',concept_type:'term',abstraction_level:1,confidence:0.5,cluster:'custom',x:cx,y:cy};
     Object.assign(nn,nSize(nn));setData(function(d){return Object.assign({},d,{nodes:d.nodes.concat([nn])});});setSel(nn.id);};
 
-  var createEdge=function(a,b){if(!a||!b||a===b)return;setData(function(dd){
+  var createEdge=function(a,b,rel){if(!a||!b||a===b)return;setData(function(dd){
     var dup=dd.edges.some(function(e){return(e.source===a&&e.target===b)||(e.source===b&&e.target===a);});
     if(dup)return dd;
-    var ne={id:'e_'+Date.now(),source:a,target:b,relation_type:'IMPLIES',confidence:0.6};
+    var ne={id:'e_'+Date.now(),source:a,target:b,relation_type:rel||'IMPLIES',confidence:0.6};
     return Object.assign({},dd,{edges:dd.edges.concat([ne])});});};
 
   /* ── Derived data ── */
@@ -403,9 +441,8 @@ export default function App(){
   var vn=useMemo(function(){return nodes.filter(function(n){return visIds.has(n.id);});},[nodes,visIds]);
   var ve=useMemo(function(){return edges.filter(function(e){return visIds.has(e.source)&&visIds.has(e.target);});},[edges,visIds]);
   /* display sets after applying the active study mode */
-  var growIds=useMemo(function(){if(studyMode!=='grow')return null;var s=new Set();for(var i=0;i<Math.min(growN,growOrder.length);i++)s.add(growOrder[i].id);return s;},[studyMode,growN,growOrder]);
-  var navSet=useMemo(function(){if(studyMode!=='navigate'||!navFocus)return null;var s=new Set([navFocus]);edges.forEach(function(e){if(e.source===navFocus)s.add(e.target);if(e.target===navFocus)s.add(e.source);});return s;},[studyMode,navFocus,edges]);
-  var dispNodes=useMemo(function(){if(studyMode==='skeleton'&&parkedIds)return vn.filter(function(n){return!parkedIds.has(n.id);});if(studyMode==='grow'&&growIds)return vn.filter(function(n){return growIds.has(n.id);});if(studyMode==='navigate'&&navSet)return vn.filter(function(n){return navSet.has(n.id);});return vn;},[vn,studyMode,parkedIds,growIds,navSet]);
+  var growReveal=useMemo(function(){if(studyMode!=='grow')return null;var ns=new Set(),es=new Set();for(var i=0;i<Math.min(growStep,growEvents.length);i++){var ev=growEvents[i];if(ev.k==='n')ns.add(ev.id);else es.add(ev.key);}return{ns:ns,es:es};},[studyMode,growStep,growEvents]);
+  var dispNodes=useMemo(function(){if(studyMode==='grow'&&growReveal)return vn.filter(function(n){return growReveal.ns.has(n.id);});return vn;},[vn,studyMode,growReveal]);
   var dispSet=useMemo(function(){var s=new Set();dispNodes.forEach(function(n){s.add(n.id);});return s;},[dispNodes]);
   var maskLabel=function(n){if(studyMode==='review'&&revealed&&!revealed.has(n.id))return"• • •";return n.label;};
   var hulls=useMemo(function(){var g={};vn.forEach(function(n){var c=n.cluster||'x';if(!g[c])g[c]=[];g[c].push(n);});return Object.keys(g).filter(function(k){return g[k].length>=2;}).map(function(k){return{key:k,d:hullPath(convexHull(g[k].map(function(n2){return{x:n2.x,y:n2.y};})),45)};});},[vn]);
@@ -516,31 +553,18 @@ export default function App(){
   );
 
   /* ── Home ── */
-  var homeView=view==='home'?h("div",{key:"hm",style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:20,padding:"40px 20px"}},
+  var MODES=[["auto","Auto","AI extracts the full map. The fastest start.","#6C5CE7"],["guided","Guided","You give a focus question; AI maps around it, you refine.","#74B9FF"],["socratic","Socratic","After extraction, AI asks structural questions — you reason and deepen it.","#A29BFE"],["manual","Structured","Start from the extracted concepts, then build and label links yourself.","#00B8A9"]];
+  var homeView=view==='home'?h("div",{key:"hm",style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:18,padding:"40px 20px"}},
     h("h1",{style:{fontSize:28,fontWeight:700,background:"linear-gradient(135deg,#6C5CE7,#00B8A9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Mycel"),
-    h("p",{style:{fontSize:15,color:MUT,lineHeight:1.7,maxWidth:420,textAlign:"center"}},"Upload a textbook. AI extracts concepts and shows how they connect."),
-    h("div",{onClick:function(){if(!uploading){var el=document.getElementById('fi');if(el)el.click();}},style:{width:"100%",maxWidth:460,border:"2px dashed "+BRD,borderRadius:14,padding:"28px 20px",textAlign:"center",cursor:uploading?"wait":"pointer"}},
+    h("p",{style:{fontSize:15,color:MUT,lineHeight:1.7,maxWidth:440,textAlign:"center"}},"Choose how you want to build, then upload a textbook or notes. Every mode starts from the source so the map has real grounding."),
+    h("div",{style:{width:"100%",maxWidth:560,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}},MODES.map(function(m){var on=pendingMode===m[0];return h("div",{key:m[0],onClick:function(){setPendingMode(m[0]);},style:{padding:"12px 14px",borderRadius:12,border:"1px solid "+(on?m[3]:BRD),background:on?m[3]+"14":"transparent",cursor:"pointer",borderLeft:"3px solid "+m[3]}},h("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:2}},h("div",{style:{width:9,height:9,borderRadius:"50%",background:on?m[3]:BRD}}),h("span",{style:{fontSize:14,fontWeight:600,color:on?m[3]:TXT}},m[1])),h("div",{style:{fontSize:11.5,color:MUT,lineHeight:1.5}},m[2]));})),
+    pendingMode==='guided'?h("input",{value:gTopic,placeholder:"Focus question, e.g. How does refraction relate to wave speed?",onChange:function(e){setGTopic(e.target.value);},style:{width:"100%",maxWidth:560,padding:"10px 14px",background:SURF,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,fontFamily:"inherit"}}):null,
+    h("div",{onClick:function(){if(!uploading){var el=document.getElementById('fi');if(el)el.click();}},style:{width:"100%",maxWidth:560,border:"2px dashed "+(uploading?"#A29BFE":BRD),borderRadius:14,padding:"26px 20px",textAlign:"center",cursor:uploading?"wait":"pointer",transition:"border-color .2s"}},
       h("input",{id:"fi",type:"file",accept:".pdf,.docx,.txt,.md,.epub",style:{display:"none"},disabled:uploading,onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
       prog&&prog.stage!=='done'?h("div",null,h("div",{style:{fontSize:15,fontWeight:600,marginBottom:4}},stages[prog.stage]||'Processing...'),h("div",{style:{fontSize:12,color:DIM}},prog.message)):
-      h("div",null,h("div",{style:{fontSize:15,fontWeight:500,marginBottom:4}},"Drop a file or click to upload"),h("div",{style:{fontSize:12,color:DIM}},"PDF, DOCX, TXT, MD, EPUB"),!user?h("div",{style:{fontSize:11,color:DIM,marginTop:6}},"Log in to save maps"):null)),
-    h("div",{style:{display:"flex",gap:8,alignItems:"center"}},
-      h("button",{onClick:function(){setView('library');},style:B(DIM,"transparent")},"Browse library"),
-      h("button",{onClick:function(){setModePick(true);},style:B()},"Create from scratch")),
-    h("p",{style:{fontSize:11,color:DIM,maxWidth:440,textAlign:"center",lineHeight:1.6}},"The auto-extracted map is the fastest start — but building one yourself is where the learning happens."),
-    modePick?h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:120},onClick:function(){setModePick(false);}},
-      h("div",{onClick:function(e){e.stopPropagation();},style:{width:440,maxWidth:"92vw",background:SURF,border:"1px solid "+BRD,borderRadius:18,padding:24}},
-        h("h3",{style:{fontSize:17,fontWeight:700,marginBottom:4}},"How do you want to build?"),
-        h("p",{style:{fontSize:12,color:DIM,marginBottom:14,lineHeight:1.6}},"Same map, different amounts of cognitive work — more effort, more learning."),
-        [["guided","Guided generation","Give a topic or focus question; AI drafts a map you then refine.","#74B9FF"],["socratic","Socratic build","AI asks; you answer. You build the map step by step — highest learning.","#A29BFE"],["manual","Structured manual","A blank canvas with a guided form for concepts and labelled links.","#00B8A9"],["sketch","Free sketch","An open canvas to draw and arrange ideas loosely.","#FDCB6E"]].map(function(m){return h("div",{key:m[0],onClick:function(){if(m[0]==='guided'){setModePick(false);setGuidedOpen(true);}else{startMap(m[0]);}},style:{padding:"12px 14px",borderRadius:12,border:"1px solid "+BRD,marginBottom:8,cursor:"pointer",borderLeft:"3px solid "+m[3]}},h("div",{style:{fontSize:14,fontWeight:600,marginBottom:2,color:m[3]}},m[1]),h("div",{style:{fontSize:12,color:MUT,lineHeight:1.5}},m[2]));}),
-        h("button",{onClick:function(){setModePick(false);},style:Object.assign({width:"100%",marginTop:4},B(DIM,"transparent"))},"Cancel"))):null,
-    guidedOpen?h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:120},onClick:function(){if(!gBusy)setGuidedOpen(false);}},
-      h("div",{onClick:function(e){e.stopPropagation();},style:{width:460,maxWidth:"92vw",background:SURF,border:"1px solid "+BRD,borderRadius:18,padding:24}},
-        h("h3",{style:{fontSize:17,fontWeight:700,marginBottom:4,color:"#74B9FF"}},"Guided generation"),
-        h("p",{style:{fontSize:12,color:DIM,marginBottom:12,lineHeight:1.6}},"Give a focus question or topic. Optionally paste source text. AI drafts a map; you confirm and refine it."),
-        h("input",{value:gTopic,placeholder:"Topic or focus question (required)",onChange:function(e){setGTopic(e.target.value);},style:{width:"100%",padding:"9px 12px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:14,marginBottom:8,fontFamily:"inherit"}}),
-        h("textarea",{value:gText,placeholder:"Optional: paste notes or source text to ground the map",rows:4,onChange:function(e){setGText(e.target.value);},style:{width:"100%",padding:"9px 12px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,marginBottom:8,fontFamily:"inherit",resize:"vertical"}}),
-        gErr?h("div",{style:{fontSize:12,color:"#FF6B6B",marginBottom:8}},gErr):null,
-        h("div",{style:{display:"flex",gap:8}},h("button",{disabled:gBusy,onClick:runGuided,style:Object.assign({flex:2,opacity:gBusy?0.6:1},B("#74B9FF","rgba(116,185,255,0.12)"))},gBusy?"Generating…":"Generate map"),h("button",{disabled:gBusy,onClick:function(){setGuidedOpen(false);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Cancel")))):null
+      h("div",null,h("div",{style:{fontSize:15,fontWeight:600,marginBottom:4}},"Upload to start in "+(MODES.filter(function(m){return m[0]===pendingMode;})[0]||["","Auto"])[1]+" mode"),h("div",{style:{fontSize:12,color:DIM}},"Drop a file or click · PDF, DOCX, TXT, MD, EPUB"),!user?h("div",{style:{fontSize:11,color:DIM,marginTop:6}},"Log in to save maps"):null)),
+    h("button",{onClick:function(){setView('library');},style:B(DIM,"transparent")},"Browse library"),
+    h("p",{style:{fontSize:11,color:DIM,maxWidth:460,textAlign:"center",lineHeight:1.6}},"Auto is fastest; Socratic and Structured ask more of you — and that effort is where the learning happens.")
   ):null;
 
   /* ── Library ── */
@@ -701,18 +725,20 @@ export default function App(){
         h("rect",{x:-c.w/2-4,y:-c.h/2-4,width:c.w+8,height:c.h+8,rx:10,fill:(c.kind==='text')?(isDark?"#3A3320":"#FFF7DD"):SURF,stroke:(c.kind==='formula')?"#A29BFE":BRD,strokeWidth:1}),
         blockEls(c,TXT,DIM,BRD),
         h("g",{transform:"translate("+(c.w/2)+","+(-c.h/2)+")",style:{cursor:"pointer"},onPointerDown:function(ev){ev.stopPropagation();setData(function(dd){return Object.assign({},dd,{cards:(dd.cards||[]).filter(function(x){return x.id!==c.id;})});});}},h("circle",{r:9,fill:"#FF6B6B"}),h("path",{d:"M-3 -3L3 3M3 -3L-3 3",stroke:"#fff",strokeWidth:1.6,strokeLinecap:"round"})));}),
-      Object.keys(ep).map(function(k){return ep[k];}).reduce(function(a,b){return a.concat(b);},[]).map(function(e,i){var s=nm[e.source],t=nm[e.target];if(!s||!t)return null;if(!dispSet.has(e.source)||!dispSet.has(e.target))return null;if(studyMode==='soil'&&!soilLinks)return null;var cat=edgeCat(e.relation_type),st=P.edges[cat]||P.edges.custom;var thick=st.w*(0.5+(e.confidence||0.5)*0.5);var hi=selId===e.source||selId===e.target||hovId===e.source||hovId===e.target||(focusEdge&&((focusEdge.s===e.source&&focusEdge.t===e.target)||(focusEdge.s===e.target&&focusEdge.t===e.source)));var path=(cat==='compositional'||cat==='pedagogical')?sPath(s.x,s.y,t.x,t.y):edgePath(s.x,s.y,t.x,t.y,e.idx,ep[[e.source,e.target].sort().join('|')].length);var tr="translate("+cam.x+","+cam.y+") scale("+cam.z+")";var dash=lineMode==='solid'?"":(lineMode==='dashed'?"9 5":st.dash);return h("g",{key:"e"+i},hi?h("path",{d:path,fill:"none",stroke:st.color,strokeWidth:thick+7,opacity:0.12,transform:tr}):null,h("path",Object.assign({d:path,fill:"none",stroke:st.color,strokeWidth:hi?thick*1.5:thick,opacity:(studyMode==='soil'&&soilLinks)?0.3:(hi?0.9:0.55),transform:tr,strokeLinecap:"round",markerEnd:(arrowsOn&&ARROW_CATS.has(cat))?"url(#ah)":""},studyMode==='grow'?{pathLength:"1",strokeDasharray:"1",style:{animation:"growDraw .85s ease both"}}:{strokeDasharray:dash})));}),
+      Object.keys(ep).map(function(k){return ep[k];}).reduce(function(a,b){return a.concat(b);},[]).map(function(e,i){var s=nm[e.source],t=nm[e.target];if(!s||!t)return null;if(!dispSet.has(e.source)||!dispSet.has(e.target))return null;if(studyMode==='soil'&&!soilLinks)return null;var ekey=e.source+'>'+e.target+'>'+e.relation_type;if(studyMode==='grow'&&growReveal&&!growReveal.es.has(ekey))return null;var cat=edgeCat(e.relation_type),st=P.edges[cat]||P.edges.custom;var thick=st.w*(0.5+(e.confidence||0.5)*0.5);var hi=selId===e.source||selId===e.target||hovId===e.source||hovId===e.target||(focusEdge&&((focusEdge.s===e.source&&focusEdge.t===e.target)||(focusEdge.s===e.target&&focusEdge.t===e.source)));var path=(cat==='compositional'||cat==='pedagogical')?sPath(s.x,s.y,t.x,t.y):edgePath(s.x,s.y,t.x,t.y,e.idx,ep[[e.source,e.target].sort().join('|')].length);var tr="translate("+cam.x+","+cam.y+") scale("+cam.z+")";var dash=lineMode==='solid'?"":(lineMode==='dashed'?"9 5":st.dash);return h("g",{key:"e"+i},hi?h("path",{d:path,fill:"none",stroke:st.color,strokeWidth:thick+7,opacity:0.12,transform:tr}):null,h("path",Object.assign({d:path,fill:"none",stroke:st.color,strokeWidth:hi?thick*1.5:thick,opacity:(studyMode==='soil'&&soilLinks)?0.3:(hi?0.9:0.55),transform:tr,strokeLinecap:"round",markerEnd:(arrowsOn&&ARROW_CATS.has(cat))?"url(#ah)":""},studyMode==='grow'?{pathLength:"1",strokeDasharray:"1",style:{animation:"growDraw "+(Math.max(150,growSpeed)/1000)+"s ease both"}}:{strokeDasharray:dash})));}),
       linkFrom&&linkPos&&nm[linkFrom]?h("path",{key:"linkline",d:"M"+nm[linkFrom].x+" "+nm[linkFrom].y+" L"+linkPos.x+" "+linkPos.y,fill:"none",stroke:"#A29BFE",strokeWidth:2,strokeDasharray:"6 5",opacity:0.85,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"}):null,
-      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var llines=masked?["• • •"]:(n.ll||[]);var dl=(showD&&!masked)?(n.dl||[]):[];var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
-        return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam.z+")",style:{cursor:tool==='select'||tool==='magnify'||studyMode==='navigate'?'pointer':'inherit',animation:studyMode==='grow'?'growFade .55s ease both':undefined},
-          onClick:function(ev){ev.stopPropagation();if(studyMode==='review'){setRevealed(function(s){var n2=new Set(s||[]);n2.add(n.id);return n2;});return;}if(studyMode==='navigate'){walkTo(n.id);return;}if(tool==='magnify')zoomTo(n.id);else if(tool==='select'){setFocusEdge(null);setSel(selId===n.id?null:n.id);}},
+      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var soil=studyMode==='soil';var llines=masked?["• • •"]:(n.ll||[]);var dl=((soil||showD)&&!masked)?(n.dl||[]):[];var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
+        return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam.z+")",style:{cursor:tool==='select'||tool==='magnify'?'pointer':'inherit',animation:studyMode==='grow'?('growFade '+(Math.max(150,growSpeed)/1000)+'s ease both'):undefined},
+          onClick:function(ev){ev.stopPropagation();if(studyMode==='review'){setRevealed(function(s){var n2=new Set(s||[]);n2.add(n.id);return n2;});return;}if(tool==='magnify')zoomTo(n.id);else if(tool==='select'){setFocusEdge(null);setSel(selId===n.id?null:n.id);}},
           onPointerDown:function(ev){if(studyMode==='review'){return;}if(tool==='magnify'){zoomTo(n.id);ev.stopPropagation();ev.preventDefault();return;}if(tool!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var nbrs=getNeighbors(n.id,edges);var off={};Object.keys(nbrs).forEach(function(id){off[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});setDrag({t:'c',nid:n.id,nbrs:nbrs,sx:ev.clientX-rc.left,sy:ev.clientY-rc.top,ox:n.x,oy:n.y,off:off});ev.preventDefault();}},
+          (soil&&!shapesOn)?h("rect",{x:-n.w/2-8,y:-totalH/2-8,width:n.w+16,height:totalH+16,rx:12,fill:SURF,stroke:t.a,strokeWidth:0.8,opacity:0.92}):null,
           shapesOn?shapeEl(shp,sbox.w,sbox.h,{fill:masked?P.surface:t.b,stroke:isSel?t.a:t.s,strokeWidth:isSel?2.5:(isHov?1.6:1.1),opacity:isSel?1:0.92}):null,
           (!shapesOn&&isSel)?h("rect",{x:-n.w/2-6,y:-totalH/2-6,width:n.w+12,height:totalH+12,rx:14,fill:SURF,stroke:t.a,strokeWidth:2,opacity:0.95}):null,
           (!shapesOn&&isHov&&!isSel)?h("rect",{x:-n.w/2-4,y:-totalH/2-4,width:n.w+8,height:totalH+8,rx:12,fill:"none",stroke:t.a,strokeWidth:1,opacity:0.3,strokeDasharray:"4 3"}):null,
+          soil?h("rect",{x:-n.w/2+2,y:-totalH/2+10,width:n.w-4,height:lSz+6,rx:3,fill:t.a,opacity:0.18}):null,
           h("circle",{cx:-n.w/2+6,cy:-totalH/2+6,r:4,fill:t.a,opacity:0.7}),
           llines.map(function(line,li){return h("text",{key:"l"+li,x:0,y:-totalH/2+20+li*22,textAnchor:"middle",dominantBaseline:"central",fontSize:lSz,fontWeight:"600",fill:masked?DIM:t.a,fontFamily:"'Inter',sans-serif",style:{pointerEvents:"none"}},line);}),
-          dl.map(function(line,di){return h("text",{key:"d"+di,x:0,y:-totalH/2+(n.lh||30)+10+di*(dSz+6),textAnchor:"middle",dominantBaseline:"central",fontSize:dSz,fill:t.s,opacity:0.75,fontFamily:"'Inter',sans-serif",style:{pointerEvents:"none"}},line);}));})
+          dl.map(function(line,di){return h("text",{key:"d"+di,x:0,y:-totalH/2+(n.lh||30)+10+di*(dSz+6),textAnchor:"middle",dominantBaseline:"central",fontSize:dSz,fill:t.s,opacity:0.85,fontFamily:"'Inter',sans-serif",style:{pointerEvents:"none"}},line);}));})
     ),
     /* Detail card */
     selN?(function(){var sc=w2s(selN.x,selN.y);var t=tcolor(selN.concept_type);var rc=cRef.current?cRef.current.getBoundingClientRect():{width:800};var cW=260;var cx2=Math.min(Math.max(8,sc.x+70),rc.width-cW-12);var cy2=Math.max(8,sc.y-40);
@@ -783,36 +809,23 @@ export default function App(){
     /* Study-mode panel */
     studyOpen?h("div",{key:"study",style:{position:"absolute",left:8,bottom:10,width:240,background:SURF,border:"1px solid "+BRD,borderRadius:12,padding:"12px 14px",boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:26}},
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},h("span",{style:{fontSize:13,fontWeight:600}},"Study mode"),h("button",{onClick:function(){setStudyOpen(false);},style:{background:"none",border:"none",color:DIM,cursor:"pointer",display:"inline-flex"}},IC('close',14))),
-      h("div",{style:{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}},[["full","Full"],["skeleton","Skeleton"],["grow","Grow"],["review","Review"],["navigate","Navigate"],["soil","Soil"]].map(function(sm){return h("button",{key:sm[0],onClick:function(){if(sm[0]==='full'){setStudyMode('full');}else{enterStudy(sm[0]);}},style:{flex:"1 0 30%",padding:"5px 0",borderRadius:6,fontSize:11,cursor:"pointer",border:"1px solid "+(studyMode===sm[0]?"#00B8A9":BRD),background:studyMode===sm[0]?"rgba(0,184,169,0.15)":"transparent",color:studyMode===sm[0]?"#00B8A9":DIM}},sm[1]);})),
-      studyMode==='navigate'?h("div",null,
-        h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Walk the map one concept at a time — a prototype of moving through the palace. Click a neighbour to step there."),
-        navFocus&&nm[navFocus]?h("div",{style:{marginBottom:6}},h("div",{style:{fontSize:13,fontWeight:600,color:tcolor(nm[navFocus].concept_type).a}},nm[navFocus].label),nm[navFocus].description?h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginTop:2}},nm[navFocus].description):null):null,
-        (function(){if(!navFocus)return null;var nb=[];edges.forEach(function(e){if(e.source===navFocus&&nm[e.target])nb.push(nm[e.target]);if(e.target===navFocus&&nm[e.source])nb.push(nm[e.source]);});if(!nb.length)return h("div",{style:{fontSize:11,color:DIM}},"No links from here.");return h("div",{style:{display:"flex",flexWrap:"wrap",gap:4,marginBottom:6}},nb.slice(0,12).map(function(n){var t=tcolor(n.concept_type);return h("button",{key:n.id,onClick:function(){walkTo(n.id);},style:{padding:"4px 8px",borderRadius:8,fontSize:11,cursor:"pointer",background:t.a+"18",border:"1px solid "+t.a+"55",color:t.a}},n.label);}));})(),
-        h("div",{style:{display:"flex",gap:4}},h("button",{onClick:walkBack,disabled:navPath.length<2,style:Object.assign({flex:1,opacity:navPath.length<2?0.5:1},B(DIM,"transparent"))},"← Back"),h("span",{style:{fontSize:10,color:DIM,alignSelf:"center"}},"trail: "+navPath.length))):null,
+      h("div",{style:{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}},[["full","Full"],["grow","Grow"],["review","Review"],["soil","Soil"]].map(function(sm){return h("button",{key:sm[0],onClick:function(){if(sm[0]==='full'){setStudyMode('full');}else{enterStudy(sm[0]);}},style:{flex:"1 0 44%",padding:"5px 0",borderRadius:6,fontSize:11,cursor:"pointer",border:"1px solid "+(studyMode===sm[0]?"#00B8A9":BRD),background:studyMode===sm[0]?"rgba(0,184,169,0.15)":"transparent",color:studyMode===sm[0]?"#00B8A9":DIM}},sm[1]);})),
       studyMode==='soil'?h("div",null,
-        h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Spatial mode: links are hidden (still stored), like mycelium under soil. Group concepts and content blocks by position; reveal links when you want."),
+        h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Spatial mode: definitions show inline and links are hidden (still stored) — like mycelium under soil. Group concepts and content blocks by position; reveal links when you want."),
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},h("span",{style:{fontSize:11,color:MUT}},"Show hidden links"),h("button",{onClick:function(){setSoilLinks(!soilLinks);},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(soilLinks?"rgba(0,184,169,0.4)":BRD),background:soilLinks?"rgba(0,184,169,0.15)":"transparent",color:soilLinks?"#00B8A9":DIM}},soilLinks?"On":"Off")),
         h("div",{style:{fontSize:10,color:DIM,marginTop:6}},"Add definitions, formulas, tables and images from the + Content button.")):null,
-      studyMode==='skeleton'?h("div",null,
-        h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Place each parked concept back from the list on the right. Scaffold tuned to your level."),
-        h("div",{style:{fontSize:10,color:DIM,marginBottom:3}},"Scaffold: "+Math.round(skeletonFrac*100)+"% hidden"),
-        h("input",{type:"range",min:"0.15",max:"0.7",step:"0.05",value:skeletonFrac,onChange:function(e){reparkSkeleton(parseFloat(e.target.value));},style:{width:"100%",accentColor:"#00B8A9"}})):null,
       studyMode==='grow'?h("div",null,
-        h("div",{style:{fontSize:11,color:MUT,marginBottom:6}},"Showing "+growN+" / "+nodes.length+(growPred&&growN<nodes.length?" — predict what connects next, then reveal.":"")),
+        h("div",{style:{fontSize:11,color:MUT,marginBottom:6}},"Watch the map build the way it connects — parents grow a link and the child emerges at the tip; opposing or equivalent ideas appear together, then link. Step "+Math.min(growStep,growEvents.length)+" / "+growEvents.length+"."),
         h("div",{style:{display:"flex",gap:4,marginBottom:6}},
-          h("button",{onClick:function(){if(growN>=nodes.length){setGrowN(0);}setGrowPlay(!growPlay);},style:Object.assign({flex:1},B("#00B8A9","rgba(0,184,169,0.12)"))},growPlay?"Pause":(growN>=nodes.length?"Replay":"Play")),
-          h("button",{onClick:function(){setGrowPlay(false);setGrowN(Math.min(nodes.length,growN+1));},style:Object.assign({flex:1},B(DIM,"transparent"))},"Step"),
-          h("button",{onClick:function(){setGrowPlay(false);setGrowN(0);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Reset")),
-        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},h("span",{style:{fontSize:11,color:MUT}},"Prediction prompts"),h("button",{onClick:function(){setGrowPred(!growPred);},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(growPred?"rgba(0,184,169,0.4)":BRD),background:growPred?"rgba(0,184,169,0.15)":"transparent",color:growPred?"#00B8A9":DIM}},growPred?"On":"Off"))):null,
+          h("button",{onClick:function(){if(growStep>=growEvents.length){setGrowStep(0);}setGrowPlay(!growPlay);},style:Object.assign({flex:1},B("#00B8A9","rgba(0,184,169,0.12)"))},growPlay?"Pause":(growStep>=growEvents.length?"Replay":"Play")),
+          h("button",{onClick:function(){setGrowPlay(false);setGrowStep(Math.min(growEvents.length,growStep+1));},style:Object.assign({flex:1},B(DIM,"transparent"))},"Step"),
+          h("button",{onClick:function(){setGrowPlay(false);setGrowStep(0);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Reset")),
+        h("div",{style:{fontSize:10,color:DIM,marginBottom:2}},"Speed"),
+        h("input",{type:"range",min:"200",max:"2000",step:"100",value:2200-growSpeed,onChange:function(e){setGrowSpeed(2200-parseInt(e.target.value));},style:{width:"100%",accentColor:"#00B8A9"}})):null,
       studyMode==='review'?h("div",null,
         h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Labels are hidden — click a concept to recall and reveal it. "+(revealed?revealed.size:0)+" / "+dispNodes.length+" revealed."),
         h("div",{style:{display:"flex",gap:4}},h("button",{onClick:function(){var s=new Set();dispNodes.forEach(function(n){s.add(n.id);});setRevealed(s);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Reveal all"),h("button",{onClick:function(){setRevealed(new Set());},style:Object.assign({flex:1},B(DIM,"transparent"))},"Hide all"))):null,
-      studyMode==='full'?h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5}},"Skeleton hides concepts to place back · Grow replays construction · Review hides labels for retrieval practice."):null
-    ):null,
-    /* Parking lot (skeleton) */
-    (studyMode==='skeleton'&&parkedIds)?h("div",{key:"park",style:{position:"absolute",top:8,right:8,width:200,maxHeight:"60vh",overflowY:"auto",background:SURF,border:"1px solid #00B8A9",borderRadius:12,padding:"12px 14px",boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:26}},
-      h("div",{style:{fontSize:12,fontWeight:600,marginBottom:8,color:"#00B8A9"}},"Parking Lot"),
-      (function(){var pl=nodes.filter(function(n){return parkedIds.has(n.id);});if(!pl.length)return h("div",{style:{fontSize:12,color:"#51CF66",textAlign:"center",padding:"8px 0"}},"All placed. Well done.");return h("div",{style:{display:"flex",flexWrap:"wrap",gap:5}},pl.map(function(n){var t=tcolor(n.concept_type);return h("button",{key:n.id,title:"Place "+n.label,onClick:function(){setParkedIds(function(s){var n2=new Set(s);n2.delete(n.id);return n2;});setSel(n.id);zoomTo(n.id);},style:{padding:"4px 8px",borderRadius:8,fontSize:11,cursor:"pointer",background:t.a+"18",border:"1px solid "+t.a+"55",color:t.a}},n.label);}));})()
+      studyMode==='full'?h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5}},"Grow animates how concepts connect · Review hides labels for retrieval practice · Soil shows definitions inline and hides links for spatial study."):null
     ):null,
     /* Structured add (Manual mode C) */
     structOpen?h("div",{key:"struct",style:{position:"absolute",top:8,right:8,width:230,background:SURF,border:"1px solid "+BRD,borderRadius:12,padding:"12px 14px",boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:24}},
@@ -824,25 +837,31 @@ export default function App(){
       h("div",{style:{fontSize:10,color:MUT,lineHeight:1.5,marginTop:8}},"Use the Connect tool (L) to draw labelled relations between concepts.")
     ):null,
     /* Socratic build (Mode B) */
-    socOpen?h("div",{key:"soc",style:{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)",width:380,maxWidth:"92%",background:SURF,border:"1px solid #A29BFE",borderRadius:14,padding:"14px 16px",boxShadow:"0 8px 30px rgba(0,0,0,0.3)",zIndex:27}},
-      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},h("span",{style:{fontSize:12,fontWeight:600,color:"#A29BFE"}},"Socratic build · step "+(socStep+1)+"/4"),h("button",{onClick:function(){setSocOpen(false);},style:{background:"none",border:"none",color:DIM,cursor:"pointer",display:"inline-flex"}},IC('close',14))),
-      socStep===0?h("div",null,
-        h("div",{style:{fontSize:14,marginBottom:8}},"What is the single most central idea of this topic?"),
-        h("div",{style:{display:"flex",gap:6}},h("input",{value:socInput,autoFocus:true,placeholder:"e.g. Natural selection",onChange:function(e){setSocInput(e.target.value);},onKeyDown:function(e){if(e.key==='Enter'&&socInput.trim()){var id=addConcept(socInput.trim(),'framework','',0,0);setSocFocus(id);setSocInput("");setSocStep(1);}},style:{flex:1,padding:"7px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,fontFamily:"inherit"}}),h("button",{onClick:function(){if(socInput.trim()){var id=addConcept(socInput.trim(),'framework','',0,0);setSocFocus(id);setSocInput("");setSocStep(1);}},style:B()},"Add"))):null,
-      socStep===1?h("div",null,
-        h("div",{style:{fontSize:14,marginBottom:8}},"Name a concept that follows from or is part of \""+(nm[socFocus]?nm[socFocus].label:"it")+"\". Add a few, one at a time."),
-        h("div",{style:{display:"flex",gap:6,marginBottom:6}},h("input",{value:socInput,placeholder:"Another concept",onChange:function(e){setSocInput(e.target.value);},onKeyDown:function(e){if(e.key==='Enter'&&socInput.trim()){var ang=Math.random()*6.28,id=addConcept(socInput.trim(),'term','',Math.cos(ang)*180,Math.sin(ang)*180);if(socFocus)createEdge(socFocus,id);setSocInput("");}},style:{flex:1,padding:"7px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,fontFamily:"inherit"}}),h("button",{onClick:function(){if(socInput.trim()){var ang=Math.random()*6.28,id=addConcept(socInput.trim(),'term','',Math.cos(ang)*180,Math.sin(ang)*180);if(socFocus)createEdge(socFocus,id);setSocInput("");}},style:B()},"Add")),
-        h("button",{onClick:function(){setSocStep(2);fit(nodes);},style:Object.assign({width:"100%"},B(DIM,"transparent"))},"Continue ("+nodes.length+" concepts)")):null,
-      socStep===2?h("div",null,
-        h("div",{style:{fontSize:14,marginBottom:8}},"Connect two of your concepts — how do they relate?"),
-        h("div",{style:{display:"flex",gap:4,marginBottom:6,alignItems:"center"}},
-          h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);},style:{flex:1,minWidth:0,padding:"5px",background:BG,border:"1px solid "+BRD,borderRadius:6,color:TXT,fontSize:11,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"from…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
-          h("span",{style:{fontSize:11,color:DIM}},"→"),
-          h("select",{value:socInput,onChange:function(e){setSocInput(e.target.value);},style:{flex:1,minWidth:0,padding:"5px",background:BG,border:"1px solid "+BRD,borderRadius:6,color:TXT,fontSize:11,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"to…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);})))),
-        h("div",{style:{display:"flex",gap:6}},h("button",{onClick:function(){if(socFocus&&socInput&&socFocus!==socInput){createEdge(socFocus,socInput);setSocInput("");}},style:Object.assign({flex:1},B())},"Link"),h("button",{onClick:function(){setSocStep(3);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Continue"))):null,
-      socStep===3?h("div",null,
-        h("div",{style:{fontSize:14,marginBottom:8}},"You built this yourself — the understanding is in the links you made. Keep refining on the canvas, add notes, and label relations."),
-        h("button",{onClick:function(){setSocOpen(false);setStudyMode('full');},style:Object.assign({width:"100%"},B("#51CF66","rgba(81,207,102,0.12)"))},"Finish")):null
+    socOpen?h("div",{key:"soc",style:{position:"fixed",top:0,left:0,right:0,bottom:0,display:"flex",alignItems:"flex-start",justifyContent:"center",pointerEvents:"none",zIndex:40}},
+      h("div",{style:{pointerEvents:"auto",marginTop:"12vh",width:480,maxWidth:"92vw",background:SURF,border:"1px solid #A29BFE",borderRadius:16,padding:"22px 24px",boxShadow:"0 12px 40px rgba(0,0,0,0.35)",textAlign:"center"}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},h("span",{style:{fontSize:11,fontWeight:600,color:"#A29BFE",letterSpacing:0.5}},"SOCRATIC · QUESTION "+(socStep+1)+" / 4"),h("button",{onClick:function(){setSocOpen(false);},style:{background:"none",border:"none",color:DIM,cursor:"pointer",display:"inline-flex"}},IC('close',16))),
+        socStep===0?h("div",null,
+          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:16}},"Which single concept, if you removed it, would make most of this map fall apart?"),
+          h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);if(e.target.value){setSel(e.target.value);zoomTo(e.target.value);}},style:{width:"100%",padding:"9px 12px",background:BG,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,marginBottom:14,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"Choose the load-bearing concept…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
+          h("button",{onClick:function(){setSocStep(1);},disabled:!socFocus,style:Object.assign({width:"100%",opacity:socFocus?1:0.5},B())},"Next")):null,
+        socStep===1?h("div",null,
+          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:6}},"Find two ideas from different parts of the map that should connect but don't."),
+          h("div",{style:{fontSize:12,color:MUT,marginBottom:14}},"Linking distant clusters is where real understanding shows."),
+          h("div",{style:{display:"flex",gap:6,marginBottom:10,alignItems:"center"}},
+            h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);},style:{flex:1,minWidth:0,padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:12,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"from…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
+            h("select",{value:socRel,onChange:function(e){setSocRel(e.target.value);},style:{padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:11,fontFamily:"inherit"}},relTypes.map(function(rt){return h("option",{key:rt,value:rt},rt.replace(/_/g,' '));})),
+            h("select",{value:socInput,onChange:function(e){setSocInput(e.target.value);},style:{flex:1,minWidth:0,padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:12,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"to…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);})))),
+          h("div",{style:{display:"flex",gap:8}},h("button",{onClick:function(){if(socFocus&&socInput&&socFocus!==socInput){createEdge(socFocus,socInput,socRel);setSocInput("");}},style:Object.assign({flex:1},B())},"Add link"),h("button",{onClick:function(){setSocStep(2);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Next"))):null,
+        socStep===2?h("div",null,
+          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:14}},"Pick the relationship that most surprised you — why does it hold?"),
+          h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,marginBottom:8,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"Choose a concept…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
+          h("textarea",{value:socWhy,placeholder:"Because…",rows:3,onChange:function(e){setSocWhy(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,marginBottom:10,fontFamily:"inherit",resize:"vertical"}}),
+          h("div",{style:{display:"flex",gap:8}},h("button",{onClick:function(){if(socFocus&&socWhy.trim()){var fid=socFocus,wt=socWhy.trim();setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(n){return n.id===fid?Object.assign({},n,{note:(n.note?n.note+"\n":"")+wt}):n;})});});setSocWhy("");}setSocStep(3);},style:Object.assign({flex:1},B())},"Save & next"),h("button",{onClick:function(){setSocStep(3);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Skip"))):null,
+        socStep===3?h("div",null,
+          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:14}},"In one sentence, what is the big idea that ties this whole map together?"),
+          h("textarea",{value:socWhy,placeholder:"The core idea is…",rows:3,onChange:function(e){setSocWhy(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:14,marginBottom:12,fontFamily:"inherit",resize:"vertical"}}),
+          h("button",{onClick:function(){if(socWhy.trim()){var c=centerWorld();addBlock({kind:"text",text:"Big idea: "+socWhy.trim(),x:c.x,y:c.y-40,w:260,h:110});}setSocOpen(false);setSocWhy("");setStudyMode('full');},style:Object.assign({width:"100%"},B("#51CF66","rgba(81,207,102,0.12)"))},"Finish — pin the takeaway")):null,
+        h("div",{style:{display:"flex",justifyContent:"center",gap:6,marginTop:16}},[0,1,2,3].map(function(i){return h("div",{key:i,onClick:function(){setSocStep(i);},style:{width:i===socStep?20:7,height:7,borderRadius:7,background:i===socStep?"#A29BFE":BRD,cursor:"pointer",transition:"width .2s"}});})))
     ):null,
     /* Content block menu */
     contentMenu?h("div",{key:"cmenu",style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",background:SURF,border:"1px solid "+BRD,borderRadius:10,padding:8,boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:28,display:"flex",gap:6}},
