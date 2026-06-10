@@ -1,3 +1,5 @@
+from backend.app.services.media import enrich
+from backend.app.routes.socratic import router as socratic_router
 import os, shutil, json, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Header, Body, Query
@@ -7,7 +9,6 @@ from backend.app.config import UPLOAD_DIR
 from backend.app.pipeline.orchestrator import run
 from backend.app.services.storage import *
 from backend.app.services.media import extract_media, attach_provenance
-from backend.app.routes.socratic import router as socratic_router
 from backend.app.services.storage import update_map_state
 
 logging.basicConfig(level=logging.INFO)
@@ -74,10 +75,10 @@ async def upload(file: UploadFile = File(...), force: bool = Query(False),
         pass
 
     # (b) scrape images / tables / formulas (skipped when the user picks "Text only")
-    figures = extract_media(str(fp), text_only=text_only)
+    figures = enrich(graph, str(fp), text_only=text_only) 
     graph.metadata = dict(graph.metadata or {})
     graph.metadata["figures"] = figures
-    
+
     map_id = save_map(file.filename, graph)
     return {
         "status": "success", "map_id": map_id, "document": file.filename,

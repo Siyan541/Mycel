@@ -206,63 +206,95 @@ export default function PDFViewer(props) {
   var pageTextRef = useRef({});
   useEffect(function() { pageTextRef.current = pageText; }, [pageText]);
 
-  // Find the page where a concept's quote or significant label words appear
-  var findConceptPage = function(node) {
-    var pt = pageTextRef.current;
-    // 1) honour backend source_page if it actually contains the concept
-    if (node.source_page && pt[node.source_page]) {
-      var bx = hlBoxes(node.source_page);
-      if (bx.length) return node.source_page;
-    }
-    // 2) otherwise scan the whole indexed document
-    var keys = Object.keys(pt).map(function(k) { return parseInt(k); }).sort(function(a, b) { return a - b; });
-    var toks = sigTokens(node.label);
-    for (var i = 0; i < keys.length; i++) {
-      var p = keys[i], page = pt[p];
-      if (node.source_quote && quoteSpan(page, node.source_quote).length) return p;
-      for (var j = 0; j < page.items.length; j++) {
-        var w = page.items[j].str.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (w.length >= 4 && toks.indexOf(w) >= 0) return p;
-      }
-    }
-    return node.source_page || null;
-  };
+  var _nf = useState(null), notFound = _nf[0], setNotFound = _nf[1];
 
-  // When a concept is selected: find its page, scroll there, then to the matched line
+  // ── Matching primitives ───────────────────────────────────
+  var STOP = { the:1,a:1,an:1,of:1,to:1,in:1,on:1,and:1,or:1,is:1,are:1,was:1,were:1,be:1,by:1,for:1,with:1,as:1,at:1,it:1,its:1,this:1,that:1,these:1,those:1,from:1,which:1,we:1,can:1,will:1,not:1,but:1,if:1,then:1,so:1,such:1,into:1,than:1,also:1,may:1,each:1,any:1,all:1,one:1,two:1,their:1,they:1,has:1,have:1,had:1,where:1,when:1,how:1,what:1,more:1,most:1,some:1,other:1,using:1,used:1,use:1,between:1,within:1,about:1 };
+  // generic words that must NOT disambiguate on their own (theorem 3.3 vs 3.1 bug)
+  var COMMON = { theorem:1,figure:1,fig:1,table:1,definition:1,section:1,chapter:1,equation:1,eqn:1,example:1,lemma:1,proof:1,corollary:1,problem:1,exercise:1,page:1,note:1,remark:1,case:1,part:1,step:1,property:1,result:1,form:1,value:1,number:1 };
+  var normWS = function(s) { return (s || '').toLowerCase().replace(/\s+/g, ' ').trim(); };
+  var sigTokens = function(s) { var out = []; normWS(s).split(/[^a-z0-9.]+/).forEach(function(w) { w = w.replace(/^\.+|\.+$/g, ''); if (w.length >= 3 && !STOP[w]) out.push(w); }); return out; };
+  var esc = function(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
+  var pageConcat = function(pt) {
+    if (pt._concat != null) return pt;
+    var s = '', map = [];
+    for (var i = 0; i < pt.items.length; i++) { var w = pt.items[i].str.toLowerCase().replace(/\s+/g, ' '); for (var c = 0; c < w.length; c++) { s += w[c]; map.push(i); } s += ' '; map.push(i); }
+    pt._concat = s; pt._map = map; return pt;
+  };
+  var locate = function(pt, phrase) { pageConcat(pt); var p = normWS(phrase); if (p.length < 3) return null; var idx = pt._concat.indexOf(p); if (idx < 0) return null; return { s: idx, e: idx + p.length }; };
+  var wordIdx = function(pt, tok) { pageConcat(pt); var re = new RegExp('(^|[^a-z0-9])' + esc(tok) + '([^a-z0-9]|$)'); var m = re.exec(pt._concat); if (!m) return -1; return m.index + m[1].length; };
+  var expandSentence = function(pt, cs, ce) { var s = pt._concat, a = cs, b = ce; var lim = 0; while (a > 0 && '.?!\n'.indexOf(s[a - 1]) < 0 && lim < 400) { a--; lim++; } lim = 0; while (b < s.length && '.?!'.indexOf(s[b]) < 0 && lim < 400) { b++; lim++; } if (b < s.length) b++; return { a: a, b: b }; };
+  var itemsInRange = function(pt, ca, cb) { var seen = {}, out = []; for (var k = ca; k <= cb && k < pt._map.length; k++) { var idx = pt._map[k]; if (!seen[idx]) { seen[idx] = 1; out.push(pt.items[idx]); } } return out; };
+  var paragraphsOf = function(pt) {
+    if (pt._paras) return pt._paras;
+    var items = pt.items.slice().sort(function(a, b) { return (a.fy - b.fy) || (a.fx - b.fx); });
+    var lines = [], cur = null;
+    for (var i = 0; i < items.length; i++) { var it = items[i]; if (cur && Math.abs(it.fy - cur.fy) < (cur.fh || 0.012) * 0.8) { cur.items.push(it); } else { cur = { fy: it.fy, fh: it.fh || 0.012, items: [it] }; lines.push(cur); } }
+    var paras = [], pc = null;
+    for (var j = 0; j < lines.length; j++) { var ln = lines[j]; if (pc && (ln.fy - pc.lastFy) < (ln.fh * 2.2)) { pc.items = pc.items.concat(ln.items); pc.lastFy = ln.fy; } else { pc = { items: ln.items.slice(), lastFy: ln.fy }; paras.push(pc); } }
+    paras.forEach(function(p) { p.text = p.items.map(function(x) { return x.str.toLowerCase(); }).join(' '); });
+    pt._paras = paras; return paras;
+  };
+  var tokenPages = function(tok) { var pt2 = pageTextRef.current, keys = Object.keys(pt2), c = 0; for (var i = 0; i < keys.length; i++) { pageConcat(pt2[keys[i]]); if (pt2[keys[i]]._concat.indexOf(tok) >= 0) c++; } return c || 999; };
+  var pageOrder = function(prefer) { var pt2 = pageText; var keys = Object.keys(pt2).map(function(k) { return parseInt(k); }).sort(function(a, b) { return a - b; }); if (prefer && pt2[prefer]) keys = [prefer].concat(keys.filter(function(k) { return k !== prefer; })); return keys; };
+
+  // Where does the SELECTED concept live, and which run of text defines it?
+  var conceptHit = useMemo(function() {
+    if (!selectedId) return null;
+    var node = null; for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
+    if (!node) return null;
+    var order = pageOrder(node.source_page);
+    var k, pg, pt, loc, ex;
+    // 1) backend verbatim definition quote — exact locate
+    if (node.source_quote) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, node.source_quote); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b) }; } } }
+    // 2) the FULL label phrase incl. numbers ("theorem 3.3"), not the word "theorem"
+    var label = normWS(node.label);
+    if (label.length >= 3) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, label); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b) }; } } }
+    // 3) rarest distinctive token (never a generic word like "theorem")
+    var toks = sigTokens(node.label).filter(function(t) { return !COMMON[t]; }); if (!toks.length) toks = sigTokens(node.label);
+    if (toks.length) { toks.sort(function(a, b) { return tokenPages(a) - tokenPages(b); }); var tk = toks[0]; for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; var wi = wordIdx(pt, tk); if (wi >= 0) { ex = expandSentence(pt, wi, wi + tk.length); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b) }; } } }
+    return null;
+  }, [selectedId, nodes, pageText]);
+
+  // Where is the paragraph that supports the FOCUSED link?
+  var relationHit = useMemo(function() {
+    if (!focusEdge) return null;
+    var k, pg, pt, loc, ex;
+    var order = pageOrder(focusEdge.source_page);
+    // 1) backend evidence sentence — exact locate, expand to its paragraph
+    if (focusEdge.evidence) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, focusEdge.evidence); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b) }; } } }
+    // 2) the paragraph where BOTH endpoints co-occur
+    var sa = sigTokens(focusEdge.sourceLabel).filter(function(t) { return !COMMON[t]; });
+    var sb = sigTokens(focusEdge.targetLabel).filter(function(t) { return !COMMON[t]; });
+    if (sa.length && sb.length) { var keys = Object.keys(pageText).map(function(x) { return parseInt(x); }).sort(function(a, b) { return a - b; }); for (k = 0; k < keys.length; k++) { pg = keys[k]; pt = pageText[pg]; var paras = paragraphsOf(pt); for (var p = 0; p < paras.length; p++) { var txt = paras[p].text; var hasA = sa.some(function(t) { return txt.indexOf(t) >= 0; }); var hasB = sb.some(function(t) { return txt.indexOf(t) >= 0; }); if (hasA && hasB) return { page: pg, boxes: paras[p].items }; } } }
+    return null;
+  }, [focusEdge, pageText]);
+
+  // Scroll + announce when a concept is selected
   useEffect(function() {
-    if (!selectedId) { setHighlights([]); return; }
-    var node = null;
-    for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
-    if (!node) return;
-    var pg = findConceptPage(node);
-    if (!pg) return;
+    if (!selectedId) { setHighlights([]); setNotFound(null); return; }
+    if (!conceptHit) { setNotFound(selectedId); return; }
+    setNotFound(null);
+    var pg = conceptHit.page;
     scrollToPage(pg);
-    if (node.source_quote) setHighlights([{ page: pg, text: node.source_quote }]);
     setTimeout(function() {
       var cont = pdfContainerRef.current; if (!cont) return;
       var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
-      var boxes = hlBoxes(pg);
-      if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+      if (conceptHit.boxes.length) { var top = pageEl.offsetTop + conceptHit.boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
     }, 700);
-  }, [selectedId, nodes, scrollToPage, pageText]);
+  }, [selectedId, conceptHit, scrollToPage]);
 
-  // When a relation is focused: scroll to where its endpoints appear
+  // Scroll to the supporting paragraph when a link is focused
   useEffect(function() {
-    if (!focusEdge) return;
-    var pg = focusEdge.source_page || (function() { for (var i = 0; i < nodes.length; i++) { } return null; })();
-    // pick the first page that has any matching token
-    var targetPage = focusEdge.source_page || null;
-    if (!targetPage) { var keys = Object.keys(pageTextRef.current); for (var k = 0; k < keys.length; k++) { if (relBoxes(parseInt(keys[k])).length) { targetPage = parseInt(keys[k]); break; } } }
-    if (targetPage) {
-      scrollToPage(targetPage);
-      setTimeout(function() {
-        var cont = pdfContainerRef.current; if (!cont) return;
-        var pageEl = cont.querySelector('[data-page="' + targetPage + '"]'); if (!pageEl) return;
-        var boxes = relBoxes(targetPage);
-        if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
-      }, 650);
-    }
-  }, [focusEdge, scrollToPage]);
+    if (!focusEdge || !relationHit) return;
+    var pg = relationHit.page;
+    scrollToPage(pg);
+    setTimeout(function() {
+      var cont = pdfContainerRef.current; if (!cont) return;
+      var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
+      if (relationHit.boxes.length) { var top = pageEl.offsetTop + relationHit.boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+    }, 700);
+  }, [focusEdge, relationHit, scrollToPage]);
 
   // Re-run the scroll-to-paragraph once the page's text layer is available
   useEffect(function() {
@@ -313,52 +345,15 @@ export default function PDFViewer(props) {
     return byPage;
   }, [nodes]);
 
-  // ── Explainable highlighting ──────────────────────────────
-  var STOP = { the:1,a:1,an:1,of:1,to:1,in:1,on:1,and:1,or:1,is:1,are:1,was:1,were:1,be:1,by:1,for:1,with:1,as:1,at:1,it:1,its:1,this:1,that:1,these:1,those:1,from:1,which:1,we:1,can:1,will:1,not:1,but:1,if:1,then:1,so:1,such:1,into:1,than:1,also:1,may:1,each:1,any:1,all:1,one:1,two:1,their:1,they:1,has:1,have:1,had:1,where:1,when:1,how:1,what:1,more:1,most:1,some:1,other:1,using:1,used:1,use:1,between:1,within:1,about:1 };
-  var sigTokens = function(s) { var out = []; (s || '').toLowerCase().split(/[^a-z0-9]+/).forEach(function(w) { if (w.length >= 4 && !STOP[w]) out.push(w); }); return out; };
-  // Find the run of items that spans a quote phrase (so we highlight the sentence, not "the")
-  var quoteSpan = function(pt, quote) {
-    if (!quote) return [];
-    var norm = quote.toLowerCase().replace(/\s+/g, ' ').trim();
-    var probe = norm.slice(0, Math.min(norm.length, 50));
-    var concat = '', map = [];
-    for (var i = 0; i < pt.items.length; i++) { var s = pt.items[i].str.toLowerCase(); for (var c = 0; c < s.length; c++) { concat += s[c]; map.push(i); } concat += ' '; map.push(i); }
-    var idx = concat.indexOf(probe);
-    if (idx < 0) return [];
-    var endChar = Math.min(idx + Math.max(probe.length, norm.length) - 1, map.length - 1);
-    var a = map[idx], b = map[endChar], boxes = [];
-    for (var k = a; k <= b && k < pt.items.length; k++) boxes.push(pt.items[k]);
-    return boxes;
-  };
-  // Boxes for the selected concept: prefer its quoted sentence, else its significant label words
-  var hlBoxes = function(pageNum) {
-    if (!selectedId) return [];
-    var node = null;
-    for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
-    if (!node) return [];
-    var pt = pageText[pageNum]; if (!pt) return [];
-    if (node.source_quote) { var span = quoteSpan(pt, node.source_quote); if (span.length) return span; }
-    var toks = sigTokens(node.label); if (!toks.length) return [];
-    var out = [];
-    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length >= 4 && toks.indexOf(w) >= 0) out.push(it); });
-    return out;
-  };
-  // Boxes for a focused relation: where its two endpoints' significant words appear
-  var relBoxes = function(pageNum) {
-    if (!focusEdge) return [];
-    var pt = pageText[pageNum]; if (!pt) return [];
-    var toks = sigTokens(focusEdge.sourceLabel).concat(sigTokens(focusEdge.targetLabel));
-    if (!toks.length) return [];
-    var out = [];
-    pt.items.forEach(function(it) { var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length >= 4 && toks.indexOf(w) >= 0) out.push(it); });
-    return out;
-  };
-  // Auto-link: only whole significant label words are clickable (not "the")
+  // ── Box getters (read the memoized hits computed above) ────
+  var hlBoxes = function(pageNum) { return (conceptHit && conceptHit.page === pageNum) ? conceptHit.boxes : []; };
+  var relBoxes = function(pageNum) { return (relationHit && relationHit.page === pageNum) ? relationHit.boxes : []; };
+  // Auto-link: distinctive label words on their own page become clickable
   var linkBoxes = function(pageNum) {
     var pt = pageText[pageNum]; if (!pt) return [];
     var pageNodes = nodes.filter(function(n) { return (n.source_page || 0) === pageNum; });
     if (!pageNodes.length) return [];
-    var toksByNode = pageNodes.map(function(n) { return { id: n.id, toks: sigTokens(n.label) }; });
+    var toksByNode = pageNodes.map(function(n) { return { id: n.id, toks: sigTokens(n.label).filter(function(t) { return !COMMON[t] && t.length >= 4; }) }; });
     var out = [];
     pt.items.forEach(function(it) {
       var w = it.str.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); if (w.length < 4) return;
@@ -393,6 +388,7 @@ export default function PDFViewer(props) {
           h('button', { title: 'Zoom in', onClick: function() { setScale(function(s) { return Math.min(3, s + 0.2); }); }, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: TXT, cursor: 'pointer' } }, PIC('plus', 15))
         )
       ),
+      (notFound && notFound === selectedId) ? h('div', { style: { fontSize: 11, color: '#FDCB6E', padding: '5px 12px', background: 'rgba(253,203,110,0.08)', borderBottom: '1px solid ' + BRD } }, 'This concept could not be located in the source text — it may be inferred or paraphrased.') : null,
       (onAnn && annOn) ? h('div', { style: { fontSize: 11, color: DIM, padding: '4px 12px', background: SURF, borderBottom: '1px solid ' + BRD } }, annTool === 'note' ? 'Click anywhere on the page to drop a note.' : 'Click words to ' + (annTool === 'underline' ? 'underline' : 'highlight') + ' them. Click a mark to add a comment.') : null,
       // PDF pages container
       h('div', { ref: pdfContainerRef, onScroll: onScroll, style: { flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },

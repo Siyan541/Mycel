@@ -1,10 +1,9 @@
-# backend/app/routes/socratic.py
-# Conversational Socratic tutor endpoint.  Mount with: app.include_router(router)
+# Save this file as:  backend/app/services/socratic.py
+# (the services/ folder already exists and imports fine — do NOT use a new routes/ folder)
 import logging
 from fastapi import APIRouter, Body
 
-# adjust this import to match your project (same helper the extractor uses)
-from backend.app.services.llm import chat
+from backend.app.services.llm import chat  # same helper the extractor uses
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,7 +46,6 @@ async def socratic(body: dict = Body(...)):
         "Student's latest answer: " + (answer or "(none yet)") + "\n\n"
         "Ask the next single Socratic question."
     )
-
     try:
         raw = chat(
             [{"role": "system", "content": SOC_SYSTEM},

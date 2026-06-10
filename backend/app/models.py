@@ -40,6 +40,8 @@ class Relation(BaseModel):
     source_label: str; target_label: str
     relation_type: RelationType
     justification: str = ""; confidence: int = Field(ge=1, le=10)
+    page: int = 0
+    evidence: str = ""
 
 class RelationResult(BaseModel):
     relations: list[Relation]
