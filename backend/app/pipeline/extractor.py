@@ -31,7 +31,7 @@ EVERY concept must have ALL these fields:
 - "concept_type": one of theory/principle/definition/method/example/evidence/argument/term/framework/phenomenon
 - "abstraction_level": 0 for core ideas, 1 for key concepts, 2 for details, 3 for examples
 - "confidence": 1-10
-- "source_quote": brief phrase from the text
+- "source_quote": copy 4-12 words EXACTLY from the text (a real substring, not a paraphrase)
 
 EVERY relation must have ALL these fields:
 - "source_label": exact label of a concept you listed

@@ -1,5 +1,5 @@
 import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"react";
-import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile,getFavorites,renameMap,adminMaps,adminUsers,adminStats,generateMap,socraticAsk}from"./api";
+import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile,getFavorites,renameMap,saveMapGraph,adminMaps,adminUsers,adminStats,generateMap,socraticAsk}from"./api";
 import PDFViewer from'./components/PDFViewer.jsx';
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
 import{organicLayout,edgePath,sPath,wrap,nSize,convexHull,hullPath,getNeighbors}from"./utils/layout";
@@ -150,7 +150,7 @@ export default function App(){
   /* ── Core data ── */
   var hr=useReducer(histR,{past:[],present:{nodes:[],edges:[],drawings:[]},future:[]});
   var hist=hr[0],dispatch=hr[1];
-  var D=hist.present,nodes=D.nodes,edges=D.edges,drawings=D.drawings||[],cards=D.cards||[],pdfAnn=D.pdfAnn||[];
+  var D=hist.present,nodes=D.nodes,edges=D.edges,drawings=D.drawings||[],cards=D.cards||[],pdfAnn=D.pdfAnn||[],groups=D.groups||{};
   var setData=useCallback(function(fn){dispatch({type:'SET',data:typeof fn==='function'?fn(hist.present):fn});},[hist.present]);
   var undo=useCallback(function(){dispatch({type:'UNDO'});},[]);
   var redo=useCallback(function(){dispatch({type:'REDO'});},[]);
@@ -158,6 +158,7 @@ export default function App(){
   /* ── UI state ── */
   var _v=useState("home"),view=_v[0],setView=_v[1];
   var _sel=useState(null),selId=_sel[0],setSel=_sel[1];
+  var _selSet=useState(null),selSet=_selSet[0],setSelSet=_selSet[1];
   var _hov=useState(null),hovId=_hov[0],setHov=_hov[1];
   var _mid=useState(null),mapId=_mid[0],setMapId=_mid[1];
   var _maps=useState([]),maps=_maps[0],setMaps=_maps[1];
@@ -193,6 +194,11 @@ export default function App(){
   var _shapesOn=useState(localStorage.getItem("mycel_shapes")!=="0"),shapesOn=_shapesOn[0],setShapesOn=_shapesOn[1];
   var _lineMode=useState(localStorage.getItem("mycel_linemode")||"category"),lineMode=_lineMode[0],setLineMode=_lineMode[1];
   var _arrowsOn=useState(localStorage.getItem("mycel_arrows")!=="0"),arrowsOn=_arrowsOn[0],setArrowsOn=_arrowsOn[1];
+  var _textOnly=useState(localStorage.getItem("mycel_textonly")==="1"),textOnly=_textOnly[0],setTextOnly=_textOnly[1];
+  var _saveSt=useState("idle"),saveSt=_saveSt[0],setSaveSt=_saveSt[1];
+  var saveTimer=useRef(null);
+  var _socMsgs=useState([]),socMsgs=_socMsgs[0],setSocMsgs=_socMsgs[1];
+  var _socBusy=useState(false),socBusy=_socBusy[0],setSocBusy=_socBusy[1];
   var _fontScale=useState(parseFloat(localStorage.getItem("mycel_fontscale"))||1),fontScale=_fontScale[0],setFontScale=_fontScale[1];
   /* ── Connection-drawing state ── */
   var _linkFrom=useState(null),linkFrom=_linkFrom[0],setLinkFrom=_linkFrom[1];
@@ -298,6 +304,23 @@ export default function App(){
   var addTextBlock=function(){var t=window.prompt("Note / definition text:","");if(t==null||!t.trim())return;var c=centerWorld();addBlock({kind:"text",text:t.trim(),x:c.x,y:c.y,w:200,h:120});setContentMenu(false);};
   var addTable=function(){var t=window.prompt("Table rows — cells split by Tab or comma, rows by new lines:","term, definition\nforce, mass x acceleration");if(t==null||!t.trim())return;var rows=t.split(/\n/).map(function(r){return r.split(/\t|,/).map(function(cc){return cc.trim();});});var c=centerWorld();addBlock({kind:"table",rows:rows,x:c.x,y:c.y,w:Math.max(160,(rows[0]?rows[0].length:2)*92),h:Math.max(70,rows.length*26+10)});setContentMenu(false);};
   var addImageFile=function(){var inp=document.createElement("input");inp.type="file";inp.accept="image/*";inp.onchange=function(e){var f=e.target.files?e.target.files[0]:null;if(!f)return;var rd=new FileReader();rd.onload=function(){var c=centerWorld();addCard(rd.result,c.x,c.y);};rd.readAsDataURL(f);};inp.click();setContentMenu(false);};
+
+  /* ── User-defined groups (families) ── */
+  var GROUP_COLORS=["#6C5CE7","#00B8A9","#FF8FA3","#74B9FF","#FDCB6E","#A29BFE","#55EFC4","#FAB1A0","#81ECEC","#E17055"];
+  var toggleSelNode=function(id){setSelSet(function(s){var n2=new Set(s||[]);if(n2.has(id))n2.delete(id);else n2.add(id);return n2;});};
+  var groupSelected=function(){
+    if(!selSet||selSet.size<2)return;
+    var name=window.prompt("Name this group / family:","Group");if(name==null)return;name=name.trim()||"Group";
+    var gid="g_"+Date.now()+"_"+Math.floor(Math.random()*999);
+    var idx=Object.keys(groups).length%GROUP_COLORS.length;var color=GROUP_COLORS[idx];
+    var ids=selSet;
+    setData(function(dd){var ng=Object.assign({},dd.groups||{});ng[gid]={id:gid,name:name,color:color};return Object.assign({},dd,{groups:ng,nodes:dd.nodes.map(function(n){return ids.has(n.id)?Object.assign({},n,{cluster:gid}):n;})});});
+    setSelSet(null);
+  };
+  var renameGroup=function(gid){var g=groups[gid];if(!g)return;var name=window.prompt("Rename group:",g.name);if(name==null)return;setData(function(dd){var ng=Object.assign({},dd.groups||{});if(ng[gid])ng[gid]=Object.assign({},ng[gid],{name:name.trim()||ng[gid].name});return Object.assign({},dd,{groups:ng});});};
+  var recolorGroup=function(gid){var g=groups[gid];if(!g)return;var ci=GROUP_COLORS.indexOf(g.color);var next=GROUP_COLORS[(ci+1)%GROUP_COLORS.length];setData(function(dd){var ng=Object.assign({},dd.groups||{});if(ng[gid])ng[gid]=Object.assign({},ng[gid],{color:next});return Object.assign({},dd,{groups:ng});});};
+  var ungroup=function(gid){setData(function(dd){var ng=Object.assign({},dd.groups||{});delete ng[gid];return Object.assign({},dd,{groups:ng,nodes:dd.nodes.map(function(n){return n.cluster===gid?Object.assign({},n,{cluster:"misc"}):n;})});});};
+  var groupColor=function(cl){return (groups[cl]&&groups[cl].color)||null;};
   var onCanvasDrop=function(e){e.preventDefault();if(!e.dataTransfer||!e.dataTransfer.files||!e.dataTransfer.files.length)return;var f=e.dataTransfer.files[0];if(!f.type||f.type.indexOf("image")!==0)return;var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var wx=(e.clientX-rc.left-cam.x)/cam.z,wy=(e.clientY-rc.top-cam.y)/cam.z;var rd=new FileReader();rd.onload=function(){addCard(rd.result,wx,wy);};rd.readAsDataURL(f);};
 
   /* ── Shared: add a concept node, return its id ── */
@@ -341,11 +364,30 @@ export default function App(){
     });
     return events;
   },[nodes,edges]);
+  var soilTidy=function(){
+    var groups={};nodes.forEach(function(n){var c=n.cluster||'misc';(groups[c]=groups[c]||[]).push(n);});
+    var keys=Object.keys(groups);var cols=Math.max(1,Math.ceil(Math.sqrt(keys.length)));
+    var dg={};edges.forEach(function(e){dg[e.source]=(dg[e.source]||0)+1;dg[e.target]=(dg[e.target]||0)+1;});
+    var GAP=620,pos={};
+    keys.forEach(function(c,ci){
+      var cx=(ci%cols)*GAP,cy=Math.floor(ci/cols)*GAP;
+      var arr=groups[c].slice().sort(function(a,b){return (dg[b.id]||0)-(dg[a.id]||0)||(b.confidence||0)-(a.confidence||0);});
+      arr.forEach(function(n,i){
+        if(i===0){pos[n.id]={x:cx,y:cy};return;}
+        var ring=Math.ceil(i/6),idx=(i-1)%6,ang=(idx/6)*Math.PI*2+ring*0.6;
+        var rad=ring*Math.max(190,(n.w||170)*1.15);
+        pos[n.id]={x:cx+Math.cos(ang)*rad,y:cy+Math.sin(ang)*rad};
+      });
+    });
+    var newNodes=nodes.map(function(n){return pos[n.id]?Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}):n;});
+    setData(function(d){return Object.assign({},d,{nodes:d.nodes.map(function(n){return pos[n.id]?Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}):n;})});});
+    setTimeout(function(){fit(newNodes);},40);
+  };
   var enterStudy=function(m){
     setStudyMode(m);setStudyOpen(true);setSel(null);
     if(m==='grow'){setGrowStep(0);setGrowPlay(true);}
     if(m==='review'){setRevealed(new Set());}
-    if(m==='soil'){setSoilLinks(false);setTimeout(function(){fit(nodes);},30);}
+    if(m==='soil'){setSoilLinks(false);setTimeout(function(){soilTidy();},20);}
   };
 
   /* ── Effects ── */
@@ -357,6 +399,16 @@ export default function App(){
   },[view,user]);
   useEffect(function(){localStorage.setItem("mycel_ctypes",JSON.stringify(customTypes));},[customTypes]);
   useEffect(function(){localStorage.setItem("mycel_crels",JSON.stringify(customRels));},[customRels]);
+  useEffect(function(){localStorage.setItem("mycel_textonly",textOnly?"1":"0");},[textOnly]);
+  useEffect(function(){
+    if(!mapId||view!=='graph'||!nodes.length)return;
+    if(saveTimer.current)clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(function(){
+      setSaveSt('saving');
+      saveMapGraph(mapId,{nodes:nodes,edges:edges,drawings:drawings,cards:cards,pdfAnn:pdfAnn,groups:groups}).then(function(){setSaveSt('saved');}).catch(function(){setSaveSt('idle');});
+    },1500);
+    return function(){if(saveTimer.current)clearTimeout(saveTimer.current);};
+  },[D,mapId,view]);
   useEffect(function(){if(showOnboard)setObStep(0);},[showOnboard]);
   useEffect(function(){if(studyMode!=='grow'||!growPlay)return;if(growStep>=growEvents.length){setGrowPlay(false);return;}var id=setTimeout(function(){setGrowStep(function(g){return Math.min(growEvents.length,g+1);});},Math.max(150,growSpeed));return function(){clearTimeout(id);};},[growPlay,growStep,studyMode,growSpeed,growEvents.length]);
   useEffect(function(){if(view==="admin"&&adminKey){adminUsers(adminKey).then(function(u){adminMaps(adminKey).then(function(m){adminStats(adminKey).then(function(s){setAdminData({users:u.users||u||[],maps:m.maps||m||[],stats:s||{}});}).catch(function(){setAdminData({users:u.users||[],maps:m.maps||[],stats:{}});});}).catch(function(){});}).catch(function(){setAdminData({error:true});});}},[view,adminKey]);
@@ -396,18 +448,40 @@ export default function App(){
   };
   var zoomTo=function(nid){var n=nm[nid];if(!n||!cRef.current)return;var rc=cRef.current.getBoundingClientRect();var z=Math.max(1.6,Math.min(cam.z,2.5));animateCam({x:-n.x*z+rc.width/2,y:-n.y*z+rc.height/2,z:z});setSel(nid);};
 
+  var SOC_FALLBACK=[
+    "In your own words, what is the core idea this whole topic is built on?",
+    "Why do these ideas belong together — what would be lost if you studied them separately?",
+    "Where would this break? Describe a case the theory does NOT explain.",
+    "If you had to teach this to a friend, where would you start, and why there?",
+    "What is the deepest assumption everything here rests on? What if it were false?",
+    "Which idea here changed how you see the others — and what changed?"
+  ];
+  var socAsk=function(answer){
+    var hist=socMsgs.slice();
+    if(answer!=null){var last=hist.length?hist[hist.length-1]:null;if(last&&last.a==null)last.a=answer;}
+    setSocBusy(true);
+    var summary=nodes.slice(0,40).map(function(n){return n.label;}).join(", ");
+    var payload={map:{concepts:summary,title:upFile?upFile.name:""},history:hist.map(function(m){return{q:m.q,a:m.a};}),answer:answer||""};
+    socraticAsk(payload).then(function(r){
+      var q=(r&&(r.question||r.reply||r.next))||SOC_FALLBACK[hist.filter(function(m){return m.a!=null;}).length%SOC_FALLBACK.length];
+      setSocMsgs(hist.concat([{q:q,a:null}]));setSocBusy(false);
+    }).catch(function(){
+      var q=SOC_FALLBACK[hist.filter(function(m){return m.a!=null;}).length%SOC_FALLBACK.length];
+      setSocMsgs(hist.concat([{q:q,a:null}]));setSocBusy(false);
+    });
+  };
   var applyPendingMode=function(){
     var m=pendingMode||'auto';setStudyMode('full');setSocOpen(false);setStructOpen(false);setBuilderMode(m);
-    if(m==='socratic'){setSocStep(0);setSocInput("");setSocFocus(null);setTimeout(function(){setSocOpen(true);},400);}
+    if(m==='socratic'){setSocMsgs([]);setSocInput("");setTimeout(function(){setSocOpen(true);socAsk(null);},400);}
     else if(m==='manual'){setTimeout(function(){setStructOpen(true);},400);}
   };
   var handleUpload=function(file){
     if(!file)return;setUpFile(file);
     setUpl(true);setProg({stage:'uploading',progress:0,message:'Uploading...'});
-    uploadPDF(file).then(function(r){
+    uploadPDF(file,{textOnly:textOnly}).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
-        var laid=organicLayout(r.nodes,edgesN);dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:(r.cards||[]).concat(extractMediaCards(laid,r)),pdfAnn:(r.pdfAnn||r.pdf_ann||[])}});
+        var laid=organicLayout(r.nodes,edgesN);dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r)),pdfAnn:(r.pdfAnn||r.pdf_ann||[])}});
         setMapId(r.map_id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
         setProg({stage:'done',progress:1,message:r.node_count+' concepts, '+r.edge_count+' relations'});
         applyPendingMode();
@@ -418,7 +492,11 @@ export default function App(){
 
   var loadMap=function(id){getMap(id).then(function(r){if(r.nodes){
     var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
-    var laid=organicLayout(r.nodes,edgesN);dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:(r.cards||[]),pdfAnn:(r.pdfAnn||r.pdf_ann||[])}});
+    var hasPos=r.nodes.length&&r.nodes.every(function(n){return typeof n.x==='number'&&typeof n.y==='number';});
+    var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):organicLayout(r.nodes,edgesN);
+    var savedCards=(r.cards||[]);
+    var cards2=savedCards.length?savedCards:(textOnly?[]:extractMediaCards(laid,r));
+    dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:(r.drawings||[]),cards:cards2,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:(r.groups||{})}});
     setMapId(id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
   }});};
 
@@ -445,7 +523,7 @@ export default function App(){
   var dispNodes=useMemo(function(){if(studyMode==='grow'&&growReveal)return vn.filter(function(n){return growReveal.ns.has(n.id);});return vn;},[vn,studyMode,growReveal]);
   var dispSet=useMemo(function(){var s=new Set();dispNodes.forEach(function(n){s.add(n.id);});return s;},[dispNodes]);
   var maskLabel=function(n){if(studyMode==='review'&&revealed&&!revealed.has(n.id))return"• • •";return n.label;};
-  var hulls=useMemo(function(){var g={};vn.forEach(function(n){var c=n.cluster||'x';if(!g[c])g[c]=[];g[c].push(n);});return Object.keys(g).filter(function(k){return g[k].length>=2;}).map(function(k){return{key:k,d:hullPath(convexHull(g[k].map(function(n2){return{x:n2.x,y:n2.y};})),45)};});},[vn]);
+  var hulls=useMemo(function(){var g={};vn.forEach(function(n){var c=n.cluster||'x';if(!g[c])g[c]=[];g[c].push(n);});return Object.keys(g).filter(function(k){return g[k].length>=2;}).map(function(k){var pts=g[k].map(function(n2){return{x:n2.x,y:n2.y};});var minY=1e9,atX=0;pts.forEach(function(p){if(p.y<minY){minY=p.y;atX=p.x;}});var sx=0;pts.forEach(function(p){sx+=p.x;});return{key:k,d:hullPath(convexHull(pts),45),lx:sx/pts.length,ly:minY-58};});},[vn]);
   var ep=useMemo(function(){var p={};ve.forEach(function(e){var k=[e.source,e.target].sort().join('|');if(!p[k])p[k]=[];p[k].push(Object.assign({},e,{idx:p[k].length}));});return p;},[ve]);
   var s2w=useCallback(function(sx,sy){return{x:(sx-cam.x)/cam.z,y:(sy-cam.y)/cam.z};},[cam]);
   var w2s=useCallback(function(wx,wy){return{x:wx*cam.z+cam.x,y:wy*cam.z+cam.y};},[cam]);
@@ -544,6 +622,7 @@ export default function App(){
       h("button",{title:"PDF split view",onClick:function(){setRefer(!referMode);},style:{padding:"5px 7px",borderRadius:5,border:referMode?"1px solid #A29BFE":"1px solid "+BRD,background:referMode?"rgba(162,155,254,0.12)":"transparent",color:referMode?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('split')),
       referMode?h("div",{style:{display:"flex",border:"1px solid "+BRD,borderRadius:5,overflow:"hidden"}},[["graph","Graph"],["list","List"]].map(function(sr){return h("button",{key:sr[0],onClick:function(){setSplitRight(sr[0]);localStorage.setItem("mycel_splitright",sr[0]);},style:{padding:"4px 8px",border:"none",background:splitRight===sr[0]?"rgba(162,155,254,0.18)":"transparent",color:splitRight===sr[0]?"#A29BFE":DIM,fontSize:11,cursor:"pointer"}},sr[1]);})):null,
       h("button",{title:"Study modes",onClick:function(){setStudyOpen(!studyOpen);},style:{padding:"5px 9px",borderRadius:5,border:(studyOpen||studyMode!=='full')?"1px solid #00B8A9":"1px solid "+BRD,background:(studyOpen||studyMode!=='full')?"rgba(0,184,169,0.12)":"transparent",color:(studyOpen||studyMode!=='full')?"#00B8A9":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center",fontSize:12,fontWeight:600}},studyMode==='full'?"Study":(studyMode.charAt(0).toUpperCase()+studyMode.slice(1))),
+      mapId?h("span",{title:"Edits autosave",style:{fontSize:10,color:saveSt==='saving'?"#FDCB6E":(saveSt==='saved'?"#51CF66":DIM),marginRight:4,alignSelf:"center"}},saveSt==='saving'?"Saving…":(saveSt==='saved'?"Saved":"")):null,
       h("button",{title:"Settings",onClick:function(){setShowSettings(!showSettings);},style:{padding:"5px 7px",borderRadius:5,border:showSettings?"1px solid #A29BFE":"1px solid "+BRD,background:showSettings?"rgba(162,155,254,0.12)":"transparent",color:showSettings?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('settings')),
       h("button",{title:"Find concept",onClick:function(){setShowSearch(!showSearch);},style:{padding:"5px 7px",borderRadius:5,border:showSearch?"1px solid #A29BFE":"1px solid "+BRD,background:showSearch?"rgba(162,155,254,0.12)":"transparent",color:showSearch?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('search'))
     ):null,
@@ -553,12 +632,13 @@ export default function App(){
   );
 
   /* ── Home ── */
-  var MODES=[["auto","Auto","AI extracts the full map. The fastest start.","#6C5CE7"],["guided","Guided","You give a focus question; AI maps around it, you refine.","#74B9FF"],["socratic","Socratic","After extraction, AI asks structural questions — you reason and deepen it.","#A29BFE"],["manual","Structured","Start from the extracted concepts, then build and label links yourself.","#00B8A9"]];
+  var MODES=[["auto","Auto","AI extracts the full map. The fastest start.","#6C5CE7"],["guided","Guided","You give a focus question; AI maps around it, you refine.","#74B9FF"],["socratic","Socratic","After extraction, AI asks open questions — you reason out loud.","#A29BFE"],["manual","Structured","Start from the extracted concepts, then build and label links yourself.","#00B8A9"],["sketch","Free sketch","A blank canvas to draw and arrange ideas loosely — no upload needed.","#FDCB6E"]];
   var homeView=view==='home'?h("div",{key:"hm",style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:18,padding:"40px 20px"}},
     h("h1",{style:{fontSize:28,fontWeight:700,background:"linear-gradient(135deg,#6C5CE7,#00B8A9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Mycel"),
     h("p",{style:{fontSize:15,color:MUT,lineHeight:1.7,maxWidth:440,textAlign:"center"}},"Choose how you want to build, then upload a textbook or notes. Every mode starts from the source so the map has real grounding."),
     h("div",{style:{width:"100%",maxWidth:560,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}},MODES.map(function(m){var on=pendingMode===m[0];return h("div",{key:m[0],onClick:function(){setPendingMode(m[0]);},style:{padding:"12px 14px",borderRadius:12,border:"1px solid "+(on?m[3]:BRD),background:on?m[3]+"14":"transparent",cursor:"pointer",borderLeft:"3px solid "+m[3]}},h("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:2}},h("div",{style:{width:9,height:9,borderRadius:"50%",background:on?m[3]:BRD}}),h("span",{style:{fontSize:14,fontWeight:600,color:on?m[3]:TXT}},m[1])),h("div",{style:{fontSize:11.5,color:MUT,lineHeight:1.5}},m[2]));})),
     pendingMode==='guided'?h("input",{value:gTopic,placeholder:"Focus question, e.g. How does refraction relate to wave speed?",onChange:function(e){setGTopic(e.target.value);},style:{width:"100%",maxWidth:560,padding:"10px 14px",background:SURF,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,fontFamily:"inherit"}}):null,
+    pendingMode==='sketch'?h("button",{onClick:function(){startMap('sketch');},style:Object.assign({width:"100%",maxWidth:560,padding:"16px 0",fontSize:15},B("#FDCB6E","rgba(253,203,110,0.12)"))},"Start a blank canvas"):
     h("div",{onClick:function(){if(!uploading){var el=document.getElementById('fi');if(el)el.click();}},style:{width:"100%",maxWidth:560,border:"2px dashed "+(uploading?"#A29BFE":BRD),borderRadius:14,padding:"26px 20px",textAlign:"center",cursor:uploading?"wait":"pointer",transition:"border-color .2s"}},
       h("input",{id:"fi",type:"file",accept:".pdf,.docx,.txt,.md,.epub",style:{display:"none"},disabled:uploading,onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
       prog&&prog.stage!=='done'?h("div",null,h("div",{style:{fontSize:15,fontWeight:600,marginBottom:4}},stages[prog.stage]||'Processing...'),h("div",{style:{fontSize:12,color:DIM}},prog.message)):
@@ -719,7 +799,7 @@ export default function App(){
       h("defs",null,h("marker",{id:"ah",viewBox:"0 0 12 12",refX:"11",refY:"6",markerWidth:"7",markerHeight:"7",orient:"auto"},h("path",{d:"M1 2L10 6L1 10",fill:"none",stroke:"context-stroke",strokeWidth:"1.5",strokeLinecap:"round"}))),
       drawings.map(function(dr,i){if(dr.points.length<2)return null;var d2='M'+dr.points[0].x+' '+dr.points[0].y;for(var j=1;j<dr.points.length;j++)d2+='L'+dr.points[j].x+' '+dr.points[j].y;return h("path",{key:"dr"+i,d:d2,fill:"none",stroke:dr.color,strokeWidth:dr.width/cam.z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});}),
       drawPath&&drawPath.points.length>1?(function(){var d2='M'+drawPath.points[0].x+' '+drawPath.points[0].y;for(var j=1;j<drawPath.points.length;j++)d2+='L'+drawPath.points[j].x+' '+drawPath.points[j].y;return h("path",{key:"adp",d:d2,fill:"none",stroke:drawPath.color,strokeWidth:drawPath.width/cam.z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});})():null,
-      (studyMode==='full'||studyMode==='soil')?hulls.map(function(hl){return h("path",{key:hl.key,d:hl.d,fill:P.hullFill,stroke:P.hullStroke,strokeWidth:studyMode==='soil'?1.5:1,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});}):null,
+      (studyMode==='full'||studyMode==='soil')?hulls.map(function(hl){var gc=groupColor(hl.key);return h("path",{key:hl.key,d:hl.d,fill:gc?(gc+"14"):P.hullFill,stroke:gc||P.hullStroke,strokeWidth:studyMode==='soil'?1.5:1,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});}):null,
       cards.map(function(c){var sx=c.x*cam.z+cam.x,sy=c.y*cam.z+cam.y;return h("g",{key:c.id,transform:"translate("+sx+","+sy+") scale("+cam.z+")",style:{cursor:tool==='select'?"move":"inherit"},
         onPointerDown:function(ev){if(tool!=='select')return;ev.stopPropagation();setSel(null);var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;setDrag({t:'card',cid:c.id,sx:ev.clientX-rc.left,sy:ev.clientY-rc.top,ox:c.x,oy:c.y});ev.preventDefault();}},
         h("rect",{x:-c.w/2-4,y:-c.h/2-4,width:c.w+8,height:c.h+8,rx:10,fill:(c.kind==='text')?(isDark?"#3A3320":"#FFF7DD"):SURF,stroke:(c.kind==='formula')?"#A29BFE":BRD,strokeWidth:1}),
@@ -727,10 +807,11 @@ export default function App(){
         h("g",{transform:"translate("+(c.w/2)+","+(-c.h/2)+")",style:{cursor:"pointer"},onPointerDown:function(ev){ev.stopPropagation();setData(function(dd){return Object.assign({},dd,{cards:(dd.cards||[]).filter(function(x){return x.id!==c.id;})});});}},h("circle",{r:9,fill:"#FF6B6B"}),h("path",{d:"M-3 -3L3 3M3 -3L-3 3",stroke:"#fff",strokeWidth:1.6,strokeLinecap:"round"})));}),
       Object.keys(ep).map(function(k){return ep[k];}).reduce(function(a,b){return a.concat(b);},[]).map(function(e,i){var s=nm[e.source],t=nm[e.target];if(!s||!t)return null;if(!dispSet.has(e.source)||!dispSet.has(e.target))return null;if(studyMode==='soil'&&!soilLinks)return null;var ekey=e.source+'>'+e.target+'>'+e.relation_type;if(studyMode==='grow'&&growReveal&&!growReveal.es.has(ekey))return null;var cat=edgeCat(e.relation_type),st=P.edges[cat]||P.edges.custom;var thick=st.w*(0.5+(e.confidence||0.5)*0.5);var hi=selId===e.source||selId===e.target||hovId===e.source||hovId===e.target||(focusEdge&&((focusEdge.s===e.source&&focusEdge.t===e.target)||(focusEdge.s===e.target&&focusEdge.t===e.source)));var path=(cat==='compositional'||cat==='pedagogical')?sPath(s.x,s.y,t.x,t.y):edgePath(s.x,s.y,t.x,t.y,e.idx,ep[[e.source,e.target].sort().join('|')].length);var tr="translate("+cam.x+","+cam.y+") scale("+cam.z+")";var dash=lineMode==='solid'?"":(lineMode==='dashed'?"9 5":st.dash);return h("g",{key:"e"+i},hi?h("path",{d:path,fill:"none",stroke:st.color,strokeWidth:thick+7,opacity:0.12,transform:tr}):null,h("path",Object.assign({d:path,fill:"none",stroke:st.color,strokeWidth:hi?thick*1.5:thick,opacity:(studyMode==='soil'&&soilLinks)?0.3:(hi?0.9:0.55),transform:tr,strokeLinecap:"round",markerEnd:(arrowsOn&&ARROW_CATS.has(cat))?"url(#ah)":""},studyMode==='grow'?{pathLength:"1",strokeDasharray:"1",style:{animation:"growDraw "+(Math.max(150,growSpeed)/1000)+"s ease both"}}:{strokeDasharray:dash})));}),
       linkFrom&&linkPos&&nm[linkFrom]?h("path",{key:"linkline",d:"M"+nm[linkFrom].x+" "+nm[linkFrom].y+" L"+linkPos.x+" "+linkPos.y,fill:"none",stroke:"#A29BFE",strokeWidth:2,strokeDasharray:"6 5",opacity:0.85,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"}):null,
-      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var soil=studyMode==='soil';var llines=masked?["• • •"]:(n.ll||[]);var dl=((soil||showD)&&!masked)?(n.dl||[]):[];var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
+      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var soil=studyMode==='soil';var llines=masked?["• • •"]:(n.ll||[]);var dl=((soil||showD)&&!masked)?(n.dl||[]):[];if(soil&&dl.length>4)dl=dl.slice(0,4);var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
         return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam.z+")",style:{cursor:tool==='select'||tool==='magnify'?'pointer':'inherit',animation:studyMode==='grow'?('growFade '+(Math.max(150,growSpeed)/1000)+'s ease both'):undefined},
-          onClick:function(ev){ev.stopPropagation();if(studyMode==='review'){setRevealed(function(s){var n2=new Set(s||[]);n2.add(n.id);return n2;});return;}if(tool==='magnify')zoomTo(n.id);else if(tool==='select'){setFocusEdge(null);setSel(selId===n.id?null:n.id);}},
+          onClick:function(ev){ev.stopPropagation();if(studyMode==='review'){setRevealed(function(s){var n2=new Set(s||[]);n2.add(n.id);return n2;});return;}if(tool==='magnify')zoomTo(n.id);else if(tool==='select'){if(ev.shiftKey){toggleSelNode(n.id);return;}setFocusEdge(null);setSel(selId===n.id?null:n.id);}},
           onPointerDown:function(ev){if(studyMode==='review'){return;}if(tool==='magnify'){zoomTo(n.id);ev.stopPropagation();ev.preventDefault();return;}if(tool!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var nbrs=getNeighbors(n.id,edges);var off={};Object.keys(nbrs).forEach(function(id){off[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});setDrag({t:'c',nid:n.id,nbrs:nbrs,sx:ev.clientX-rc.left,sy:ev.clientY-rc.top,ox:n.x,oy:n.y,off:off});ev.preventDefault();}},
+          (selSet&&selSet.has(n.id))?h("rect",{x:-n.w/2-7,y:-totalH/2-7,width:n.w+14,height:totalH+14,rx:14,fill:"none",stroke:"#FDCB6E",strokeWidth:2,strokeDasharray:"5 4"}):null,
           (soil&&!shapesOn)?h("rect",{x:-n.w/2-8,y:-totalH/2-8,width:n.w+16,height:totalH+16,rx:12,fill:SURF,stroke:t.a,strokeWidth:0.8,opacity:0.92}):null,
           shapesOn?shapeEl(shp,sbox.w,sbox.h,{fill:masked?P.surface:t.b,stroke:isSel?t.a:t.s,strokeWidth:isSel?2.5:(isHov?1.6:1.1),opacity:isSel?1:0.92}):null,
           (!shapesOn&&isSel)?h("rect",{x:-n.w/2-6,y:-totalH/2-6,width:n.w+12,height:totalH+12,rx:14,fill:SURF,stroke:t.a,strokeWidth:2,opacity:0.95}):null,
@@ -769,6 +850,9 @@ export default function App(){
       h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:12}},Object.keys(PALETTES).map(function(k){var p=PALETTES[k];return h("div",{key:k,onClick:function(){setPalName(k);localStorage.setItem("mycel_palette",k);},style:{padding:"3px 6px",borderRadius:4,background:palName===k?p.bg:"transparent",border:palName===k?"1.5px solid "+p.types.theory.a:"1px solid "+BRD,cursor:"pointer",display:"flex",alignItems:"center",gap:4}},h("div",{style:{width:8,height:8,borderRadius:"50%",background:p.types.theory.a}}),h("span",{style:{fontSize:9,color:palName===k?p.text:DIM}},p.name));})),
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}},h("span",{style:{fontSize:12,fontWeight:600,color:DIM}},"CONCEPT SHAPES"),h("button",{onClick:function(){var nv=!shapesOn;setShapesOn(nv);localStorage.setItem("mycel_shapes",nv?"1":"0");},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(shapesOn?"rgba(94,236,213,0.4)":BRD),background:shapesOn?"rgba(94,236,213,0.15)":"transparent",color:shapesOn?"#5EECD5":DIM}},shapesOn?"On":"Off")),
       shapesOn?h("div",{style:{fontSize:10,color:MUT,lineHeight:1.7,marginBottom:10}},"● Ellipse = theory / principle",h("br",null),"▭ Rectangle = definition / term",h("br",null),"◆ Diamond = argument / evidence",h("br",null),"⬡ Hexagon = framework",h("br",null),"▢ Pill = method  ·  Rounded = example"):h("div",{style:{fontSize:10,color:MUT,marginBottom:10}},"Text-only mode. Turn on to draw a shape per concept type."),
+      h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6}},"EXTRACTION"),
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}},h("span",{style:{fontSize:11,color:MUT}},"Text only (skip images / tables / formulas)"),h("button",{onClick:function(){setTextOnly(!textOnly);},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(textOnly?"rgba(162,155,254,0.4)":BRD),background:textOnly?"rgba(162,155,254,0.15)":"transparent",color:textOnly?"#A29BFE":DIM}},textOnly?"On":"Off")),
+      h("div",{style:{fontSize:10,color:MUT,lineHeight:1.6,marginBottom:12}},textOnly?"Concepts only — fastest, cleanest maps.":"Figures, tables and formulas from the source are pulled in as blocks (needs the media-extraction backend)."),
       h("div",{style:{fontSize:12,fontWeight:600,color:DIM,marginBottom:6}},"LINE STYLE"),
       h("div",{style:{display:"flex",gap:4,marginBottom:6}},[["category","By type"],["solid","Solid"],["dashed","Dashed"]].map(function(lm){return h("button",{key:lm[0],onClick:function(){setLineMode(lm[0]);localStorage.setItem("mycel_linemode",lm[0]);},style:{flex:1,padding:"4px 0",borderRadius:5,fontSize:10,cursor:"pointer",background:lineMode===lm[0]?"rgba(162,155,254,0.15)":"transparent",border:"1px solid "+(lineMode===lm[0]?"rgba(162,155,254,0.4)":BRD),color:lineMode===lm[0]?"#A29BFE":DIM}},lm[1]);})),
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}},h("span",{style:{fontSize:11,color:MUT}},"Direction arrows"),h("button",{onClick:function(){var nv=!arrowsOn;setArrowsOn(nv);localStorage.setItem("mycel_arrows",nv?"1":"0");},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(arrowsOn?"rgba(162,155,254,0.4)":BRD),background:arrowsOn?"rgba(162,155,254,0.15)":"transparent",color:arrowsOn?"#A29BFE":DIM}},arrowsOn?"On":"Off")),
@@ -813,7 +897,8 @@ export default function App(){
       studyMode==='soil'?h("div",null,
         h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Spatial mode: definitions show inline and links are hidden (still stored) — like mycelium under soil. Group concepts and content blocks by position; reveal links when you want."),
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},h("span",{style:{fontSize:11,color:MUT}},"Show hidden links"),h("button",{onClick:function(){setSoilLinks(!soilLinks);},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(soilLinks?"rgba(0,184,169,0.4)":BRD),background:soilLinks?"rgba(0,184,169,0.15)":"transparent",color:soilLinks?"#00B8A9":DIM}},soilLinks?"On":"Off")),
-        h("div",{style:{fontSize:10,color:DIM,marginTop:6}},"Add definitions, formulas, tables and images from the + Content button.")):null,
+        h("div",{style:{fontSize:10,color:DIM,marginTop:6}},"Add definitions, formulas, tables and images from the + Content button."),
+        h("button",{onClick:soilTidy,style:Object.assign({width:"100%",marginTop:6},B("#00B8A9","rgba(0,184,169,0.12)"))},"Tidy layout by cluster")):null,
       studyMode==='grow'?h("div",null,
         h("div",{style:{fontSize:11,color:MUT,marginBottom:6}},"Watch the map build the way it connects — parents grow a link and the child emerges at the tip; opposing or equivalent ideas appear together, then link. Step "+Math.min(growStep,growEvents.length)+" / "+growEvents.length+"."),
         h("div",{style:{display:"flex",gap:4,marginBottom:6}},
@@ -837,32 +922,33 @@ export default function App(){
       h("div",{style:{fontSize:10,color:MUT,lineHeight:1.5,marginTop:8}},"Use the Connect tool (L) to draw labelled relations between concepts.")
     ):null,
     /* Socratic build (Mode B) */
-    socOpen?h("div",{key:"soc",style:{position:"fixed",top:0,left:0,right:0,bottom:0,display:"flex",alignItems:"flex-start",justifyContent:"center",pointerEvents:"none",zIndex:40}},
-      h("div",{style:{pointerEvents:"auto",marginTop:"12vh",width:480,maxWidth:"92vw",background:SURF,border:"1px solid #A29BFE",borderRadius:16,padding:"22px 24px",boxShadow:"0 12px 40px rgba(0,0,0,0.35)",textAlign:"center"}},
-        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},h("span",{style:{fontSize:11,fontWeight:600,color:"#A29BFE",letterSpacing:0.5}},"SOCRATIC · QUESTION "+(socStep+1)+" / 4"),h("button",{onClick:function(){setSocOpen(false);},style:{background:"none",border:"none",color:DIM,cursor:"pointer",display:"inline-flex"}},IC('close',16))),
-        socStep===0?h("div",null,
-          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:16}},"Which single concept, if you removed it, would make most of this map fall apart?"),
-          h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);if(e.target.value){setSel(e.target.value);zoomTo(e.target.value);}},style:{width:"100%",padding:"9px 12px",background:BG,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,marginBottom:14,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"Choose the load-bearing concept…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
-          h("button",{onClick:function(){setSocStep(1);},disabled:!socFocus,style:Object.assign({width:"100%",opacity:socFocus?1:0.5},B())},"Next")):null,
-        socStep===1?h("div",null,
-          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:6}},"Find two ideas from different parts of the map that should connect but don't."),
-          h("div",{style:{fontSize:12,color:MUT,marginBottom:14}},"Linking distant clusters is where real understanding shows."),
-          h("div",{style:{display:"flex",gap:6,marginBottom:10,alignItems:"center"}},
-            h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);},style:{flex:1,minWidth:0,padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:12,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"from…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
-            h("select",{value:socRel,onChange:function(e){setSocRel(e.target.value);},style:{padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:11,fontFamily:"inherit"}},relTypes.map(function(rt){return h("option",{key:rt,value:rt},rt.replace(/_/g,' '));})),
-            h("select",{value:socInput,onChange:function(e){setSocInput(e.target.value);},style:{flex:1,minWidth:0,padding:"7px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:12,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"to…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);})))),
-          h("div",{style:{display:"flex",gap:8}},h("button",{onClick:function(){if(socFocus&&socInput&&socFocus!==socInput){createEdge(socFocus,socInput,socRel);setSocInput("");}},style:Object.assign({flex:1},B())},"Add link"),h("button",{onClick:function(){setSocStep(2);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Next"))):null,
-        socStep===2?h("div",null,
-          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:14}},"Pick the relationship that most surprised you — why does it hold?"),
-          h("select",{value:socFocus||"",onChange:function(e){setSocFocus(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,marginBottom:8,fontFamily:"inherit"}},[h("option",{key:"_",value:""},"Choose a concept…")].concat(nodes.map(function(n){return h("option",{key:n.id,value:n.id},n.label);}))),
-          h("textarea",{value:socWhy,placeholder:"Because…",rows:3,onChange:function(e){setSocWhy(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:13,marginBottom:10,fontFamily:"inherit",resize:"vertical"}}),
-          h("div",{style:{display:"flex",gap:8}},h("button",{onClick:function(){if(socFocus&&socWhy.trim()){var fid=socFocus,wt=socWhy.trim();setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(n){return n.id===fid?Object.assign({},n,{note:(n.note?n.note+"\n":"")+wt}):n;})});});setSocWhy("");}setSocStep(3);},style:Object.assign({flex:1},B())},"Save & next"),h("button",{onClick:function(){setSocStep(3);},style:Object.assign({flex:1},B(DIM,"transparent"))},"Skip"))):null,
-        socStep===3?h("div",null,
-          h("div",{style:{fontSize:18,fontWeight:600,lineHeight:1.5,marginBottom:14}},"In one sentence, what is the big idea that ties this whole map together?"),
-          h("textarea",{value:socWhy,placeholder:"The core idea is…",rows:3,onChange:function(e){setSocWhy(e.target.value);},style:{width:"100%",padding:"8px 10px",background:BG,border:"1px solid "+BRD,borderRadius:8,color:TXT,fontSize:14,marginBottom:12,fontFamily:"inherit",resize:"vertical"}}),
-          h("button",{onClick:function(){if(socWhy.trim()){var c=centerWorld();addBlock({kind:"text",text:"Big idea: "+socWhy.trim(),x:c.x,y:c.y-40,w:260,h:110});}setSocOpen(false);setSocWhy("");setStudyMode('full');},style:Object.assign({width:"100%"},B("#51CF66","rgba(81,207,102,0.12)"))},"Finish — pin the takeaway")):null,
-        h("div",{style:{display:"flex",justifyContent:"center",gap:6,marginTop:16}},[0,1,2,3].map(function(i){return h("div",{key:i,onClick:function(){setSocStep(i);},style:{width:i===socStep?20:7,height:7,borderRadius:7,background:i===socStep?"#A29BFE":BRD,cursor:"pointer",transition:"width .2s"}});})))
+    socOpen?h("div",{key:"soc",onPointerDown:function(e){e.stopPropagation();},style:{position:"fixed",top:0,left:0,right:0,bottom:0,display:"flex",alignItems:"flex-start",justifyContent:"center",background:"rgba(10,10,14,0.55)",pointerEvents:"auto",zIndex:60}},
+      h("div",{onClick:function(e){e.stopPropagation();},style:{marginTop:"9vh",width:520,maxWidth:"94vw",maxHeight:"80vh",display:"flex",flexDirection:"column",background:SURF,border:"1px solid #A29BFE",borderRadius:16,padding:"20px 22px",boxShadow:"0 12px 40px rgba(0,0,0,0.45)"}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
+          h("span",{style:{fontSize:11,fontWeight:600,color:"#A29BFE",letterSpacing:0.5}},"SOCRATIC DIALOGUE"),
+          h("button",{onClick:function(){setSocOpen(false);},style:{background:"none",border:"none",color:DIM,cursor:"pointer",display:"inline-flex"}},IC('close',16))),
+        h("div",{style:{flex:1,overflowY:"auto",marginBottom:12,paddingRight:4}},
+          h("div",{style:{fontSize:11,color:MUT,lineHeight:1.6,marginBottom:12}},"No right answers here — think out loud. The questions probe your understanding of the ideas, not the diagram."),
+          socMsgs.map(function(m,i){return h("div",{key:i,style:{marginBottom:14}},
+            h("div",{style:{fontSize:16,fontWeight:600,lineHeight:1.5,color:TXT,marginBottom:m.a!=null?6:0}},m.q),
+            m.a!=null?h("div",{style:{fontSize:13,color:MUT,lineHeight:1.55,background:BG,border:"1px solid "+BRD,borderRadius:8,padding:"8px 10px",whiteSpace:"pre-wrap"}},m.a):null);}),
+          socBusy?h("div",{style:{fontSize:12,color:DIM}},"…thinking"):null),
+        h("textarea",{value:socInput,autoFocus:true,placeholder:"Answer in your own words…",rows:3,disabled:socBusy,onChange:function(e){setSocInput(e.target.value);},onKeyDown:function(e){if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&socInput.trim()){socAsk(socInput.trim());setSocInput("");}},style:{width:"100%",padding:"9px 11px",background:BG,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,fontFamily:"inherit",resize:"vertical",marginBottom:8}}),
+        h("div",{style:{display:"flex",gap:8}},
+          h("button",{disabled:socBusy||!socInput.trim(),onClick:function(){if(socInput.trim()){socAsk(socInput.trim());setSocInput("");}},style:Object.assign({flex:2,opacity:(socBusy||!socInput.trim())?0.5:1},B("#A29BFE","rgba(162,155,254,0.14)"))},"Respond  (⌘⏎)"),
+          h("button",{disabled:socBusy,onClick:function(){socAsk(socInput.trim()?socInput.trim():"(skip)");setSocInput("");},style:Object.assign({flex:1},B(DIM,"transparent"))},"Another question"),
+          h("button",{onClick:function(){setSocOpen(false);setStudyMode('full');},style:Object.assign({flex:1},B("#51CF66","rgba(81,207,102,0.12)"))},"Done")))
     ):null,
+    /* User-defined group labels */
+    (studyMode==='full'||studyMode==='soil')?hulls.filter(function(hl){return groups[hl.key];}).map(function(hl){var g=groups[hl.key];var sp=w2s(hl.lx,hl.ly);return h("div",{key:"gl"+hl.key,style:{position:"absolute",left:sp.x,top:sp.y,transform:"translate(-50%,-50%)",display:"flex",alignItems:"center",gap:5,background:SURF,border:"1px solid "+g.color,borderRadius:20,padding:"3px 9px",zIndex:14,boxShadow:"0 2px 8px rgba(0,0,0,0.18)"}},
+      h("div",{onClick:function(){recolorGroup(hl.key);},title:"Change colour",style:{width:10,height:10,borderRadius:"50%",background:g.color,cursor:"pointer"}}),
+      h("span",{onClick:function(){renameGroup(hl.key);},title:"Rename group",style:{fontSize:11,fontWeight:600,color:g.color,cursor:"pointer"}},g.name),
+      h("span",{onClick:function(){ungroup(hl.key);},title:"Ungroup",style:{fontSize:13,color:DIM,cursor:"pointer",lineHeight:1}},"×"));}):null,
+    /* Group selected (multi-select) */
+    (selSet&&selSet.size>=2)?h("div",{key:"grpbar",style:{position:"absolute",bottom:14,left:"50%",transform:"translateX(-50%)",display:"flex",alignItems:"center",gap:8,background:SURF,border:"1px solid #FDCB6E",borderRadius:24,padding:"6px 10px 6px 14px",zIndex:30,boxShadow:"0 6px 24px rgba(0,0,0,0.25)"}},
+      h("span",{style:{fontSize:12,color:TXT}},selSet.size+" selected"),
+      h("button",{onClick:groupSelected,style:B("#FDCB6E","rgba(253,203,110,0.14)")},"Group as family"),
+      h("button",{onClick:function(){setSelSet(null);},style:B(DIM,"transparent")},"Clear")):null,
     /* Content block menu */
     contentMenu?h("div",{key:"cmenu",style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",background:SURF,border:"1px solid "+BRD,borderRadius:10,padding:8,boxShadow:"0 6px 24px rgba(0,0,0,0.2)",zIndex:28,display:"flex",gap:6}},
       [["Image",addImageFile],["Formula",addFormula],["Table",addTable],["Note",addTextBlock]].map(function(it){return h("button",{key:it[0],onClick:it[1],style:B()},it[0]);}),

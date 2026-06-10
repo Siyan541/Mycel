@@ -6,6 +6,9 @@ from fastapi.responses import JSONResponse, Response
 from backend.app.config import UPLOAD_DIR
 from backend.app.pipeline.orchestrator import run
 from backend.app.services.storage import *
+from backend.app.services.media import extract_media, attach_provenance
+from backend.app.routes.socratic import router as socratic_router
+from backend.app.services.storage import update_map_state
 
 logging.basicConfig(level=logging.INFO)
 ADMIN_KEY = os.getenv("ADMIN_KEY", "mycel_admin_2026")
@@ -14,12 +17,18 @@ ADMIN_KEY = os.getenv("ADMIN_KEY", "mycel_admin_2026")
 async def lifespan(app): yield
 
 app = FastAPI(title="Mycel", version="3.1.0", lifespan=lifespan)
+app.include_router(socratic_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 ALLOWED_EXT = {'.pdf','.docx','.txt','.md','.markdown','.rst','.tex','.epub'}
 def _uid(h): return h or "anonymous"
 
 @app.get("/")
 async def root(): return {"status":"ok","version":"3.1.0"}
+
+@app.put("/api/maps/{map_id}/graph")
+async def save_graph(map_id: str, body: dict = Body(...)):
+    ok = update_map_state(map_id, body)
+    return {"status": "saved" if ok else "not_found"}
 
 # Auth
 @app.post("/api/auth/register")
@@ -48,14 +57,33 @@ async def leaderboard(): return {"users": get_leaderboard()}
 
 # Maps — PRIVATE
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), x_user_id: str = Header(None)):
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in ALLOWED_EXT: return JSONResponse({"error":"Unsupported format"},400)
+async def upload(file: UploadFile = File(...), force: bool = Query(False),
+                 text_only: bool = Query(False)):
+    if not file.filename.lower().endswith(".pdf"):
+        return JSONResponse({"error": "PDF only"}, 400)
     fp = UPLOAD_DIR / file.filename
-    with open(fp,"wb") as f: shutil.copyfileobj(file.file, f)
+    with open(fp, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
     graph = run(str(fp))
-    mid = save_map(file.filename, graph, _uid(x_user_id))
-    return {"status":"success","map_id":mid,"document":file.filename,"nodes":[n.model_dump() for n in graph.nodes],"edges":[e.model_dump() for e in graph.edges],"node_count":len(graph.nodes),"edge_count":len(graph.edges)}
+
+    # (a) make the PDF split-view scroll + highlight work: exact page + verbatim quote
+    try:
+        attach_provenance(graph.nodes, str(fp))
+    except Exception:
+        pass
+
+    # (b) scrape images / tables / formulas (skipped when the user picks "Text only")
+    figures = extract_media(str(fp), text_only=text_only)
+
+    map_id = save_map(file.filename, graph)
+    return {
+        "status": "success", "map_id": map_id, "document": file.filename,
+        "nodes": [n.model_dump() for n in graph.nodes],
+        "edges": [e.model_dump() for e in graph.edges],
+        "figures": figures,                       # <-- frontend turns these into blocks
+        "node_count": len(graph.nodes), "edge_count": len(graph.edges),
+    }
 
 @app.get("/api/maps")
 async def list_maps(x_user_id: str = Header(None)): return {"maps": get_maps(_uid(x_user_id))}
@@ -63,8 +91,25 @@ async def list_maps(x_user_id: str = Header(None)): return {"maps": get_maps(_ui
 @app.get("/api/maps/{map_id}")
 async def get_map_data(map_id: str):
     g = get_map(map_id)
-    if not g: return JSONResponse({"error":"Not found"},404)
-    return {"nodes":[n.model_dump() for n in g.nodes],"edges":[e.model_dump() for e in g.edges]}
+    if not g:
+        return JSONResponse({"error": "Not found"}, 404)
+    meta = g.metadata or {}
+    st = meta.get("state")
+    if st:  # full saved frontend state (positions, cards/figures, groups, notes, annotations)
+        return {
+            "nodes": st.get("nodes", []),
+            "edges": st.get("edges", []),
+            "drawings": st.get("drawings", []),
+            "cards": st.get("cards", []),
+            "pdfAnn": st.get("pdfAnn", []),
+            "groups": st.get("groups", {}),
+            "figures": meta.get("figures", []),
+        }
+    return {
+        "nodes": [n.model_dump() for n in g.nodes],
+        "edges": [e.model_dump() for e in g.edges],
+        "figures": meta.get("figures", []),
+    }
 
 @app.get("/api/maps/{map_id}/export")
 async def export_map(map_id: str):

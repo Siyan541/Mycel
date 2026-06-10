@@ -11,7 +11,7 @@ export function updateProfile(dn,bio,theme,lang){return fetch(API+"/api/auth/pro
 export function getActivity(){return fetch(API+"/api/activity",{headers:uh()}).then(function(r){return r.json();});}
 export function getLeaderboard(){return fetch(API+"/api/leaderboard").then(function(r){return r.json();});}
 
-export function uploadFile(file){var f=new FormData();f.append("file",file);return fetch(API+"/api/upload",{method:"POST",body:f,headers:uh()}).then(function(r){return r.json();});}
+export function uploadFile(file,opts){var f=new FormData();f.append("file",file);var q=(opts&&opts.textOnly)?"?text_only=1":"";return fetch(API+"/api/upload"+q,{method:"POST",body:f,headers:uh()}).then(function(r){return r.json();});}
 export var uploadPDF=uploadFile;
 export function getMaps(){return fetch(API+"/api/maps",{headers:uh()}).then(function(r){return r.json();});}
 export function getMap(id){return fetch(API+"/api/maps/"+id).then(function(r){return r.json();});}
@@ -36,6 +36,7 @@ export function postFeedback(category,content){return fetch(API+"/api/feedback",
 export function getStats(){return fetch(API+"/api/stats").then(function(r){return r.json();});}
 
 export function renameMap(id,title){return fetch(API+"/api/maps/"+id,{method:"PATCH",headers:ah(),body:JSON.stringify({title:title})}).then(function(r){return r.json();});}
+export function saveMapGraph(id,state){return fetch(API+"/api/maps/"+id+"/graph",{method:"PUT",headers:ah(),body:JSON.stringify(state)}).then(function(r){return r.json();});}
 export function generateMap(payload){return fetch(API+"/api/generate",{method:"POST",headers:ah(),body:JSON.stringify(payload)}).then(function(r){return r.json();});}
 export function socraticAsk(payload){return fetch(API+"/api/socratic",{method:"POST",headers:ah(),body:JSON.stringify(payload)}).then(function(r){return r.json();});}
 export function adminMaps(key){return fetch(API+"/api/admin/maps?key="+encodeURIComponent(key),{headers:uh()}).then(function(r){return r.json();});}

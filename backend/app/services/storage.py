@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 from backend.app.config import DATA_DIR
 from backend.app.models import get_level
+import sqlite3, time
 
 logger = logging.getLogger(__name__)
 DB = DATA_DIR / "app.db"
@@ -202,6 +203,24 @@ def delete_map(map_id, user_id=None):
     c = _conn(); c.execute("UPDATE maps SET deleted=1, updated_at=? WHERE id=?", (datetime.now().isoformat(), map_id))
     c.commit(); c.close()
     if user_id and user_id != "anonymous": add_points(user_id, -5, "delete_map", map_id)
+
+def update_map_state(map_id, state):
+    """state = {nodes, edges, drawings, cards, pdfAnn, groups} sent by the frontend."""
+    from backend.app.services.storage import get_map  # reuse existing loader
+    g = get_map(map_id)
+    if not g:
+        return False
+    meta = dict(getattr(g, "metadata", None) or {})
+    meta["state"] = state
+    g.metadata = meta
+    conn = sqlite3.connect(DATA_DIR)
+    conn.execute(
+        "UPDATE maps SET graph_json=?, updated_at=? WHERE id=?",
+        (g.model_dump_json(), int(time.time()), map_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
 
 def confirm_map(map_id, user_id=None):
     c = _conn(); c.execute("UPDATE maps SET status='confirmed', updated_at=? WHERE id=?", (datetime.now().isoformat(), map_id))
