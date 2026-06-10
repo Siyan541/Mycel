@@ -6,6 +6,22 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 var h = React.createElement;
 
+// Small stroke-icon set for the PDF toolbar
+function PIC(name, sz, color) {
+  sz = sz || 16;
+  var paths = {
+    back: 'M15 18l-6-6 6-6',
+    highlight: 'M4 20h16 M6 16l8-8 3 3-8 8H6z M12 6l3 3',
+    underline: 'M7 5v6a5 5 0 0 0 10 0V5 M5 20h14',
+    note: 'M5 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 4V5a1 1 0 0 1 1-1z',
+    minus: 'M5 12h14',
+    plus: 'M12 5v14 M5 12h14',
+    locate: 'M12 3v3 M12 18v3 M3 12h3 M18 12h3 M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'
+  };
+  return h('svg', { width: sz, height: sz, viewBox: '0 0 24 24', fill: 'none', stroke: color || 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+    paths[name].split(' M').map(function(seg, i) { return h('path', { key: i, d: (i ? 'M' : '') + seg }); }));
+}
+
 export default function PDFViewer(props) {
   var pdfUrl = props.pdfUrl;       // URL or blob URL of the uploaded PDF
   var pdfFile = props.pdfFile;     // File object (alternative to URL)
@@ -62,6 +78,9 @@ export default function PDFViewer(props) {
         setLoading(false);
         // Render first few pages
         renderPages(pdf, 1, Math.min(pdf.numPages, 5));
+        // Build a text index for EVERY page (cheap; no canvas) so concept references
+        // and auto-scroll work across the whole document, even without backend page info.
+        buildTextIndex(pdf);
       }).catch(function(err) {
         console.error('PDF load error:', err);
         setLoading(false);
@@ -80,6 +99,30 @@ export default function PDFViewer(props) {
   }, [pdfUrl, pdfFile]);
 
   // Render pages to canvas
+  var buildTextIndex = function(pdf) {
+    var cap = Math.min(pdf.numPages, 80);
+    var go = function(pageNum) {
+      if (pageNum > cap) return;
+      pdf.getPage(pageNum).then(function(page) {
+        var viewport = page.getViewport({ scale: 1 });
+        page.getTextContent().then(function(tc) {
+          var items = [];
+          for (var ti = 0; ti < tc.items.length; ti++) {
+            var it = tc.items[ti];
+            if (!it.str || !it.str.trim()) continue;
+            var tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+            var fh = Math.hypot(tx[2], tx[3]) || 10;
+            var x = tx[4], yTop = tx[5] - fh, w = (it.width || 0);
+            items.push({ str: it.str, fx: x / viewport.width, fy: yTop / viewport.height, fw: w / viewport.width, fh: fh / viewport.height });
+          }
+          setPageText(function(prev) { if (prev[pageNum]) return prev; var n = Object.assign({}, prev); n[pageNum] = { items: items }; return n; });
+          go(pageNum + 1);
+        }).catch(function() { go(pageNum + 1); });
+      }).catch(function() {});
+    };
+    go(1);
+  };
+
   var renderPages = function(pdf, startPage, endPage) {
     var newPages = [];
     var renderNext = function(pageNum) {
@@ -163,23 +206,45 @@ export default function PDFViewer(props) {
   var pageTextRef = useRef({});
   useEffect(function() { pageTextRef.current = pageText; }, [pageText]);
 
-  // When a concept is selected: scroll to its page, then to the matched paragraph, and highlight it
+  // Find the page where a concept's quote or significant label words appear
+  var findConceptPage = function(node) {
+    var pt = pageTextRef.current;
+    // 1) honour backend source_page if it actually contains the concept
+    if (node.source_page && pt[node.source_page]) {
+      var bx = hlBoxes(node.source_page);
+      if (bx.length) return node.source_page;
+    }
+    // 2) otherwise scan the whole indexed document
+    var keys = Object.keys(pt).map(function(k) { return parseInt(k); }).sort(function(a, b) { return a - b; });
+    var toks = sigTokens(node.label);
+    for (var i = 0; i < keys.length; i++) {
+      var p = keys[i], page = pt[p];
+      if (node.source_quote && quoteSpan(page, node.source_quote).length) return p;
+      for (var j = 0; j < page.items.length; j++) {
+        var w = page.items[j].str.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (w.length >= 4 && toks.indexOf(w) >= 0) return p;
+      }
+    }
+    return node.source_page || null;
+  };
+
+  // When a concept is selected: find its page, scroll there, then to the matched line
   useEffect(function() {
     if (!selectedId) { setHighlights([]); return; }
     var node = null;
     for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
-    if (node && node.source_page) {
-      scrollToPage(node.source_page);
-      if (node.source_quote) setHighlights([{ page: node.source_page, text: node.source_quote }]);
-      var pg = node.source_page;
-      setTimeout(function() {
-        var cont = pdfContainerRef.current; if (!cont) return;
-        var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
-        var boxes = hlBoxes(pg);
-        if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
-      }, 650);
-    }
-  }, [selectedId, nodes, scrollToPage]);
+    if (!node) return;
+    var pg = findConceptPage(node);
+    if (!pg) return;
+    scrollToPage(pg);
+    if (node.source_quote) setHighlights([{ page: pg, text: node.source_quote }]);
+    setTimeout(function() {
+      var cont = pdfContainerRef.current; if (!cont) return;
+      var pageEl = cont.querySelector('[data-page="' + pg + '"]'); if (!pageEl) return;
+      var boxes = hlBoxes(pg);
+      if (boxes.length) { var top = pageEl.offsetTop + boxes[0].fy * pageEl.clientHeight - cont.clientHeight * 0.33; cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); }
+    }, 700);
+  }, [selectedId, nodes, scrollToPage, pageText]);
 
   // When a relation is focused: scroll to where its endpoints appear
   useEffect(function() {
@@ -309,23 +374,26 @@ export default function PDFViewer(props) {
     panel !== 'list' ?
     h('div', { style: { flex: panel === 'both' ? '0 0 50%' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: panel === 'both' ? '1px solid ' + BRD : 'none' } },
       // PDF toolbar
-      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', background: SURF, borderBottom: '1px solid ' + BRD } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          h('button', { onClick: onClose, style: { padding: '6px 12px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: DIM, fontSize: 13, cursor: 'pointer' } }, '← Back'),
-          h('span', { style: { fontSize: 13, color: DIM } },
-            pdfDoc ? ('Page ' + currentPage + ' / ' + pdfDoc.numPages) : 'Loading...')
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: SURF, borderBottom: '1px solid ' + BRD, gap: 8 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+          h('button', { title: 'Close PDF', onClick: onClose, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: DIM, cursor: 'pointer' } }, PIC('back', 16)),
+          h('span', { style: { fontSize: 12, color: DIM, whiteSpace: 'nowrap' } }, pdfDoc ? (currentPage + ' / ' + pdfDoc.numPages) : '…')
         ),
-        h('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
-          onAnn ? h('button', { title: 'Annotation tools', onClick: function() { setAnnOn(!annOn); }, style: { padding: '4px 10px', background: annOn ? 'rgba(253,203,110,0.18)' : 'transparent', border: '1px solid ' + (annOn ? '#FDCB6E' : BRD), borderRadius: 6, color: annOn ? '#FDCB6E' : DIM, fontSize: 12, cursor: 'pointer', fontWeight: 600 } }, annOn ? 'Annotating' : 'Annotate') : null,
-          (onAnn && annOn) ? h('div', { style: { display: 'flex', border: '1px solid ' + BRD, borderRadius: 6, overflow: 'hidden' } }, [['mark', 'Highlight'], ['underline', 'Underline']].map(function(tt) { return h('button', { key: tt[0], onClick: function() { setAnnTool(tt[0]); }, style: { padding: '4px 8px', border: 'none', background: annTool === tt[0] ? 'rgba(253,203,110,0.22)' : 'transparent', color: annTool === tt[0] ? '#FDCB6E' : DIM, fontSize: 11, cursor: 'pointer' } }, tt[1]); })) : null,
-          (onAnn && annOn) ? ['#FDCB6E', '#FF8FA3', '#7DE2D1', '#A29BFE'].map(function(c) { return h('div', { key: c, onClick: function() { setAnnColor(c); }, style: { width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', outline: annColor === c ? '2px solid ' + TXT : 'none', outlineOffset: 1 } }); }) : null,
-          (onAnn && annOn) ? h('span', { style: { fontSize: 10, color: DIM } }, 'click text to mark · click blank for a note') : null,
-          (onAnn && annOn) ? ['#FDCB6E', '#FF8FA3', '#7DE2D1', '#A29BFE'].map(function(c) { return h('div', { key: c, onClick: function() { setAnnColor(c); }, style: { width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', outline: annColor === c ? '2px solid ' + TXT : 'none', outlineOffset: 1 } }); }) : null,
-          h('button', { onClick: function() { setScale(function(s) { return Math.max(0.5, s - 0.2); }); }, style: { padding: '4px 10px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: TXT, fontSize: 16, cursor: 'pointer' } }, '−'),
-          h('span', { style: { fontSize: 12, color: DIM, padding: '4px 8px' } }, Math.round(scale * 100) + '%'),
-          h('button', { onClick: function() { setScale(function(s) { return Math.min(3, s + 0.2); }); }, style: { padding: '4px 10px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: TXT, fontSize: 16, cursor: 'pointer' } }, '+')
+        h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+          // annotation tools (icon segmented control)
+          onAnn ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 2, border: '1px solid ' + BRD, borderRadius: 8, padding: 2 } },
+            [['mark', 'highlight', 'Highlighter'], ['underline', 'underline', 'Underline'], ['note', 'note', 'Sticky note']].map(function(tt) {
+              var active = annOn && annTool === tt[0];
+              return h('button', { key: tt[0], title: tt[2], onClick: function() { if (annOn && annTool === tt[0]) { setAnnOn(false); } else { setAnnOn(true); setAnnTool(tt[0]); } }, style: { display: 'inline-flex', padding: 6, border: 'none', borderRadius: 6, background: active ? annColor : 'transparent', color: active ? '#1a1a1a' : DIM, cursor: 'pointer' } }, PIC(tt[1], 16));
+            })) : null,
+          (onAnn && annOn) ? h('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } }, ['#FDCB6E', '#FF8FA3', '#7DE2D1', '#A29BFE'].map(function(c) { return h('div', { key: c, title: 'Colour', onClick: function() { setAnnColor(c); }, style: { width: 15, height: 15, borderRadius: '50%', background: c, cursor: 'pointer', outline: annColor === c ? '2px solid ' + TXT : 'none', outlineOffset: 1 } }); })) : null,
+          h('div', { style: { width: 1, height: 18, background: BRD, margin: '0 2px' } }),
+          h('button', { title: 'Zoom out', onClick: function() { setScale(function(s) { return Math.max(0.5, s - 0.2); }); }, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: TXT, cursor: 'pointer' } }, PIC('minus', 15)),
+          h('span', { style: { fontSize: 11, color: DIM, minWidth: 30, textAlign: 'center' } }, Math.round(scale * 100) + '%'),
+          h('button', { title: 'Zoom in', onClick: function() { setScale(function(s) { return Math.min(3, s + 0.2); }); }, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: TXT, cursor: 'pointer' } }, PIC('plus', 15))
         )
       ),
+      (onAnn && annOn) ? h('div', { style: { fontSize: 11, color: DIM, padding: '4px 12px', background: SURF, borderBottom: '1px solid ' + BRD } }, annTool === 'note' ? 'Click anywhere on the page to drop a note.' : 'Click words to ' + (annTool === 'underline' ? 'underline' : 'highlight') + ' them. Click a mark to add a comment.') : null,
       // PDF pages container
       h('div', { ref: pdfContainerRef, onScroll: onScroll, style: { flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },
         loading
@@ -352,7 +420,7 @@ export default function PDFViewer(props) {
                   // Page image
                   h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', display: 'block' } }),
                   // Text-layer overlay: concept/relation highlights + clickable terms + user annotations
-                  h('div', { onClick: function(e) { if (annOn && e.target === e.currentTarget) { var r = e.currentTarget.getBoundingClientRect(); addPin(page.pageNum, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); } }, style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: annOn ? 'auto' : 'none', cursor: annOn ? 'crosshair' : 'default' } },
+                  h('div', { onClick: function(e) { if (annOn && annTool === 'note' && e.target === e.currentTarget) { var r = e.currentTarget.getBoundingClientRect(); addPin(page.pageNum, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); } }, style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: annOn ? 'auto' : 'none', cursor: annOn ? (annTool === 'note' ? 'cell' : 'text') : 'default' } },
                     // concept highlight (selected concept's sentence/words)
                     hlBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'h' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', background: 'rgba(162,155,254,0.30)', borderBottom: '2px solid #A29BFE', borderRadius: 2, pointerEvents: 'none' } }); }),
                     // relation highlight (focused link's endpoints)
@@ -364,7 +432,7 @@ export default function PDFViewer(props) {
                       return h('div', { key: a.id, title: a.note ? a.note : (a.concept ? 'Linked concept — click to open' : 'Click to add a note'), onClick: function(e) { e.stopPropagation(); if (!annOn && a.concept && onSelectConcept) { onSelectConcept(a.concept); return; } setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 100) + '%', background: underline ? 'transparent' : (a.color + '66'), borderBottom: '2px solid ' + a.color, borderRadius: 2, cursor: 'pointer', pointerEvents: 'auto' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: a.color, border: '1px solid ' + SURF } }) : null);
                     }),
                     // annotate mode: click a word to highlight it
-                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function(e) { e.stopPropagation(); toggleAnnotation(page.pageNum, it); }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
+                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function(e) { e.stopPropagation(); if (annTool === 'note') { addPin(page.pageNum, it.fx + it.fw / 2, it.fy); } else { toggleAnnotation(page.pageNum, it); } }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
                     // auto-link: significant concept labels found in the page are clickable
                     !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function(e) { e.stopPropagation(); if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', borderBottom: '2px dashed rgba(0,184,169,0.6)', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null),
                   // Concept markers for this page

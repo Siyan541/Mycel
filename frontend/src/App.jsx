@@ -64,17 +64,32 @@ var BASE_TYPES=["theory","principle","definition","method","example","evidence",
 /* ── Turn backend-extracted media (per-concept image/formula/table, or top-level figures) into content blocks ── */
 function extractMediaCards(laid, r) {
   var out = [];
+  var stagger = {};
+  function placeNear(node) {
+    var k = node.id, c = stagger[k] || 0; stagger[k] = c + 1;
+    var ang = -0.7 + c * 0.8, rad = (node.w ? node.w / 2 : 80) + 150 + c * 28;
+    return { x: node.x + Math.cos(ang) * rad, y: node.y + Math.sin(ang) * rad };
+  }
   (laid || []).forEach(function(n) {
-    var nx = n.x + (n.w ? n.w / 2 : 60) + 120, ny = n.y;
-    if (n.image) out.push({ id: 'm_' + n.id + '_img', kind: 'image', src: n.image, x: nx, y: ny, w: 180, h: 130, concept: n.id });
-    if (n.formula) out.push({ id: 'm_' + n.id + '_f', kind: 'formula', text: n.formula, x: nx, y: ny + 80, w: 210, h: 66, concept: n.id });
-    if (n.table && n.table.length) out.push({ id: 'm_' + n.id + '_t', kind: 'table', rows: n.table, x: nx, y: ny + 150, w: Math.max(160, (n.table[0] ? n.table[0].length : 2) * 92), h: Math.max(70, n.table.length * 26 + 10), concept: n.id });
+    if (n.image) { var p = placeNear(n); out.push({ id: 'm_' + n.id + '_img', kind: 'image', src: n.image, x: p.x, y: p.y, w: 180, h: 130, concept: n.id }); }
+    if (n.formula) { var p2 = placeNear(n); out.push({ id: 'm_' + n.id + '_f', kind: 'formula', text: n.formula, x: p2.x, y: p2.y, w: 210, h: 66, concept: n.id }); }
+    if (n.table && n.table.length) { var p3 = placeNear(n); out.push({ id: 'm_' + n.id + '_t', kind: 'table', rows: n.table, x: p3.x, y: p3.y, w: Math.max(160, (n.table[0] ? n.table[0].length : 2) * 92), h: Math.max(70, n.table.length * 26 + 10), concept: n.id }); }
   });
-  var extra = r.figures || r.media || r.tables || [];
-  extra.forEach(function(m, i) {
-    if (m.image || m.src) out.push({ id: 'mf_' + i, kind: 'image', src: m.image || m.src, x: -320, y: -220 + i * 150, w: 180, h: 130 });
-    else if (m.formula) out.push({ id: 'mf_' + i, kind: 'formula', text: m.formula, x: -320, y: -220 + i * 90, w: 210, h: 66 });
-    else if (m.rows || m.table) out.push({ id: 'mf_' + i, kind: 'table', rows: m.rows || m.table, x: -320, y: -220 + i * 120, w: 200, h: 90 });
+  // top-level figures: attach each to the concept that shares its page (organic, not a list)
+  var pageNode = {};
+  (laid || []).forEach(function(n) { var sp = n.source_page; if (sp && !pageNode[sp]) pageNode[sp] = n; });
+  var cx = 0, cy = 0, N = (laid && laid.length) || 1;
+  (laid || []).forEach(function(n) { cx += n.x; cy += n.y; }); cx /= N; cy /= N;
+  var figs = r.figures || r.media || r.tables || [];
+  figs.forEach(function(m, i) {
+    var kind = (m.image || m.src) ? 'image' : (m.formula ? 'formula' : ((m.rows || m.table) ? 'table' : null));
+    if (!kind) return;
+    var host = m.page ? pageNode[m.page] : null;
+    var base = host ? placeNear(host) : { x: cx + Math.cos(i * 1.3) * (260 + i * 24), y: cy + Math.sin(i * 1.3) * (260 + i * 24) };
+    var hid = host ? host.id : null;
+    if (kind === 'image') out.push({ id: 'mf_' + i, kind: 'image', src: m.image || m.src, x: base.x, y: base.y, w: 180, h: 130, concept: hid, caption: m.caption || '' });
+    else if (kind === 'formula') out.push({ id: 'mf_' + i, kind: 'formula', text: m.formula, x: base.x, y: base.y, w: 210, h: 66, concept: hid });
+    else out.push({ id: 'mf_' + i, kind: 'table', rows: m.rows || m.table, x: base.x, y: base.y, w: 200, h: 90, concept: hid });
   });
   return out;
 }
@@ -800,6 +815,7 @@ export default function App(){
       drawings.map(function(dr,i){if(dr.points.length<2)return null;var d2='M'+dr.points[0].x+' '+dr.points[0].y;for(var j=1;j<dr.points.length;j++)d2+='L'+dr.points[j].x+' '+dr.points[j].y;return h("path",{key:"dr"+i,d:d2,fill:"none",stroke:dr.color,strokeWidth:dr.width/cam.z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});}),
       drawPath&&drawPath.points.length>1?(function(){var d2='M'+drawPath.points[0].x+' '+drawPath.points[0].y;for(var j=1;j<drawPath.points.length;j++)d2+='L'+drawPath.points[j].x+' '+drawPath.points[j].y;return h("path",{key:"adp",d:d2,fill:"none",stroke:drawPath.color,strokeWidth:drawPath.width/cam.z,opacity:0.7,strokeLinecap:"round",transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});})():null,
       (studyMode==='full'||studyMode==='soil')?hulls.map(function(hl){var gc=groupColor(hl.key);return h("path",{key:hl.key,d:hl.d,fill:gc?(gc+"14"):P.hullFill,stroke:gc||P.hullStroke,strokeWidth:studyMode==='soil'?1.5:1,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"});}):null,
+      cards.filter(function(c){return c.concept&&nm[c.concept];}).map(function(c){var n=nm[c.concept];var x1=n.x*cam.z+cam.x,y1=n.y*cam.z+cam.y,x2=c.x*cam.z+cam.x,y2=c.y*cam.z+cam.y;var tc=tcolor(n.concept_type);return h("line",{key:"cl"+c.id,x1:x1,y1:y1,x2:x2,y2:y2,stroke:tc.a,strokeWidth:1.4,strokeDasharray:"2 5",opacity:0.45,strokeLinecap:"round"});}),
       cards.map(function(c){var sx=c.x*cam.z+cam.x,sy=c.y*cam.z+cam.y;return h("g",{key:c.id,transform:"translate("+sx+","+sy+") scale("+cam.z+")",style:{cursor:tool==='select'?"move":"inherit"},
         onPointerDown:function(ev){if(tool!=='select')return;ev.stopPropagation();setSel(null);var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;setDrag({t:'card',cid:c.id,sx:ev.clientX-rc.left,sy:ev.clientY-rc.top,ox:c.x,oy:c.y});ev.preventDefault();}},
         h("rect",{x:-c.w/2-4,y:-c.h/2-4,width:c.w+8,height:c.h+8,rx:10,fill:(c.kind==='text')?(isDark?"#3A3320":"#FFF7DD"):SURF,stroke:(c.kind==='formula')?"#A29BFE":BRD,strokeWidth:1}),
