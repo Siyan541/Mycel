@@ -75,7 +75,9 @@ async def upload(file: UploadFile = File(...), force: bool = Query(False),
 
     # (b) scrape images / tables / formulas (skipped when the user picks "Text only")
     figures = extract_media(str(fp), text_only=text_only)
-
+    graph.metadata = dict(graph.metadata or {})
+    graph.metadata["figures"] = figures
+    
     map_id = save_map(file.filename, graph)
     return {
         "status": "success", "map_id": map_id, "document": file.filename,
