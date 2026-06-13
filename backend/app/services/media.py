@@ -1,14 +1,18 @@
 # backend/app/services/media.py
-# Records provenance at EXTRACTION time so the frontend never has to guess:
-#   - concepts get an exact page + verbatim definition sentence
-#   - relations get an exact page + verbatim evidence sentence (for the link underline)
-#   - figures/tables/formulas get a page + caption (+ vector figures via caption-region render)
+# Provenance at EXTRACTION time so the frontend never guesses:
+#   - concepts: exact page + the BEST-MATCHING definition sentence (scored against
+#               the concept's label AND its AI description, not just first word hit)
+#   - relations: page + the sentence where both endpoints co-occur (scored)
+#   - figures/tables/formulas: page + caption (+ vector figures via caption regions)
 # Requires: PyMuPDF (fitz) + pdfplumber   ->   pip install PyMuPDF pdfplumber
 import base64, re, logging
 logger = logging.getLogger(__name__)
 
 _CAPTION = re.compile(r'^\s*(figure|fig\.?|table|chart|diagram|plate)\s*\d', re.I)
 _SENT = re.compile(r'[^.!?]*[.!?]')
+_COMMON = {"theorem", "figure", "table", "definition", "section", "chapter",
+           "equation", "example", "lemma", "proof", "corollary", "the", "and",
+           "for", "with", "that", "this", "from", "are", "was", "which"}
 
 
 def _get(o, k, d=None):
@@ -32,36 +36,32 @@ def _norm(s):
 def _page_texts(pdf_path):
     import fitz
     doc = fitz.open(pdf_path)
-    texts = [doc[i].get_text("text") for i in range(len(doc))]
+    t = [doc[i].get_text("text") for i in range(len(doc))]
     doc.close()
-    return texts
+    return t
 
 
-def _sig_tokens(s):
-    common = {"theorem", "figure", "table", "definition", "section", "chapter",
-              "equation", "example", "lemma", "proof", "corollary", "the", "and",
-              "for", "with", "that", "this", "from"}
+def _toks(s):
     out = []
     for w in re.split(r'[^a-z0-9.]+', (s or '').lower()):
         w = w.strip('.')
-        if len(w) >= 3 and w not in common:
+        if len(w) >= 3 and w not in _COMMON:
             out.append(w)
     return out
 
 
-def _sentence_with(text, needle_lower):
-    flat = _norm(text)
-    low = flat.lower()
-    i = low.find(needle_lower)
-    if i < 0:
-        return None
-    for m in _SENT.finditer(flat):
-        if m.start() <= i < m.end():
-            return m.group().strip()
-    return flat[max(0, i - 80): i + 160].strip()
+def _sentences(pages):
+    """yield (page_index, sentence_text, lower_tokenset) for every sentence."""
+    for pi, text in enumerate(pages):
+        flat = _norm(text)
+        for m in _SENT.finditer(flat):
+            s = m.group().strip()
+            if len(s) < 12:
+                continue
+            yield pi, s, set(re.split(r'[^a-z0-9]+', s.lower()))
 
 
-# 1) concept provenance: exact page + verbatim definition sentence
+# 1) concept provenance — pick the best-scoring sentence
 def attach_provenance(nodes, pdf_path):
     try:
         pages = _page_texts(pdf_path)
@@ -69,42 +69,44 @@ def attach_provenance(nodes, pdf_path):
         logger.warning("provenance: %s", e)
         return nodes
     low = [_norm(t).lower() for t in pages]
+    sents = list(_sentences(pages))
     for n in nodes:
         label = _get(n, "label") or ""
-        quote = _get(n, "source_quote") or ""
+        desc = _get(n, "description") or ""
         lab_l = _norm(label).lower()
-        probe = _norm(quote).lower()[:60] or lab_l
-        if not probe:
+        lab_tokens = set(_toks(label))
+        desc_tokens = set(_toks(desc))
+        if not lab_tokens and not desc_tokens:
             continue
-        hit = None
-        if lab_l:
+        best, best_score, best_pi = None, 0, None
+        # strong signal: a sentence that literally contains the full label phrase
+        for pi, s, sl in sents:
+            sc = 0
+            sloc = s.lower()
+            if lab_l and lab_l in sloc:
+                sc += 6
+            sc += 2 * len(lab_tokens & sl)
+            sc += 1 * len(desc_tokens & sl)
+            if sc > best_score:
+                best, best_score, best_pi = s, sc, pi
+        if best and best_score >= 2:
+            _set(n, "source_page", best_pi + 1)
+            _set(n, "source_quote", best[:240])
+            continue
+        # fallback: first page containing any distinctive label token
+        for t in _toks(label):
+            done = False
             for i, lt in enumerate(low):
-                if lab_l in lt:
-                    hit, probe = i, lab_l
+                if t in lt:
+                    _set(n, "source_page", i + 1)
+                    done = True
                     break
-        if hit is None:
-            for i, lt in enumerate(low):
-                if probe and probe in lt:
-                    hit = i
-                    break
-        if hit is None:
-            toks = _sig_tokens(label)
-            toks.sort(key=lambda t: sum(1 for lt in low if t in lt) or 999)
-            for t in toks:
-                for i, lt in enumerate(low):
-                    if t in lt:
-                        hit, probe = i, t
-                        break
-                if hit is not None:
-                    break
-        if hit is not None:
-            sent = _sentence_with(pages[hit], probe) or _norm(quote) or label
-            _set(n, "source_page", hit + 1)
-            _set(n, "source_quote", sent[:240])
+            if done:
+                break
     return nodes
 
 
-# 2) relation provenance: page + verbatim evidence sentence
+# 2) relation provenance — best sentence containing both endpoints
 def attach_relation_provenance(edges, nodes, pdf_path):
     try:
         pages = _page_texts(pdf_path)
@@ -114,22 +116,21 @@ def attach_relation_provenance(edges, nodes, pdf_path):
     lbl = {}
     for n in nodes:
         lbl[_get(n, "id")] = _get(n, "label") or ""
+    sents = list(_sentences(pages))
     for e in edges:
-        sa = _sig_tokens(lbl.get(_get(e, "source") or _get(e, "source_id"), ""))
-        sb = _sig_tokens(lbl.get(_get(e, "target") or _get(e, "target_id"), ""))
+        sa = set(_toks(lbl.get(_get(e, "source") or _get(e, "source_id"), "")))
+        sb = set(_toks(lbl.get(_get(e, "target") or _get(e, "target_id"), "")))
         if not sa or not sb:
             continue
-        found = False
-        for pi, text in enumerate(pages):
-            for m in _SENT.finditer(_norm(text)):
-                s = m.group().lower()
-                if any(t in s for t in sa) and any(t in s for t in sb):
-                    _set(e, "page", pi + 1)
-                    _set(e, "evidence", m.group().strip()[:240])
-                    found = True
-                    break
-            if found:
-                break
+        best, best_score, best_pi = None, 0, None
+        for pi, s, sl in sents:
+            if (sa & sl) and (sb & sl):
+                sc = len(sa & sl) + len(sb & sl)
+                if sc > best_score:
+                    best, best_score, best_pi = s, sc, pi
+        if best:
+            _set(e, "page", best_pi + 1)
+            _set(e, "evidence", best[:240])
     return edges
 
 
@@ -206,7 +207,6 @@ def extract_media(pdf_path, text_only=False, max_items=60):
     return out
 
 
-# one call from the upload route (before save_map)
 def enrich(graph, pdf_path, text_only=False):
     try:
         attach_provenance(graph.nodes, pdf_path)
