@@ -62,33 +62,35 @@ var REL_TYPES=["IMPLIES","REQUIRES","CONTRADICTS","EQUIVALENT","GENERALIZES","SP
 var BASE_TYPES=["theory","principle","definition","method","example","evidence","argument","term","framework","phenomenon"];
 
 /* ── Turn backend-extracted media (per-concept image/formula/table, or top-level figures) into content blocks ── */
-/* ── Organized radial layout: a clean tree from the most-connected concept,
-   children grouped under parents by sub-tree size (no far-flung/linear sprawl) ── */
+/* ── Organic relaxation: keep the natural force-layout shape, but push apart any
+   overlapping concepts (esp. the crowded ring around a hub) and gently hold
+   linked concepts near each other. No rigid tree. ── */
 function organizedLayout(nodes, edges) {
-  if (!nodes || nodes.length < 2) return (nodes || []).map(function(n) { return Object.assign({}, n, { x: 0, y: 0 }); });
-  var nm = {}, adj = {};
-  nodes.forEach(function(n) { nm[n.id] = n; adj[n.id] = []; });
-  edges.forEach(function(e) { if (nm[e.source] && nm[e.target]) { adj[e.source].push(e.target); adj[e.target].push(e.source); } });
-  var deg = {}; nodes.forEach(function(n) { deg[n.id] = adj[n.id].length; });
-  var root = nodes[0].id; nodes.forEach(function(n) { if (deg[n.id] > deg[root]) root = n.id; });
-  var visited = {}, kids = {}; nodes.forEach(function(n) { kids[n.id] = []; });
-  visited[root] = 1; var q = [root];
-  while (q.length) { var c = q.shift(); adj[c].forEach(function(o) { if (!visited[o]) { visited[o] = 1; kids[c].push(o); q.push(o); } }); }
-  nodes.forEach(function(n) { if (!visited[n.id]) { visited[n.id] = 1; kids[root].push(n.id); } });
-  var leaves = {};
-  function countLeaves(id) { if (!kids[id].length) { leaves[id] = 1; return 1; } var s = 0; kids[id].forEach(function(k) { s += countLeaves(k); }); leaves[id] = s; return s; }
-  countLeaves(root);
-  var maxW = 0; nodes.forEach(function(n) { if ((n.w || 160) > maxW) maxW = n.w || 160; });
-  var step = Math.max(220, maxW * 1.3);
-  var pos = {};
-  function place(id, a0, a1, depth) {
-    var ang = (a0 + a1) / 2, r = depth * step;
-    pos[id] = { x: Math.cos(ang) * r, y: Math.sin(ang) * r };
-    var span = a1 - a0, cur = a0;
-    kids[id].forEach(function(k) { var w = (leaves[k] / Math.max(1, leaves[id])) * span; place(k, cur, cur + w, depth + 1); cur += w; });
+  if (!nodes || nodes.length < 2) return (nodes || []).map(function(n) { return Object.assign({}, n, { x: n.x || 0, y: n.y || 0 }); });
+  var pos = {}, rad = {};
+  nodes.forEach(function(n) {
+    pos[n.id] = { x: (n.x || 0) || (Math.random() * 600 - 300), y: (n.y || 0) || (Math.random() * 600 - 300) };
+    var w = n.w || 160, hh = (n.lh || 30) + ((n.dl && n.dl.length) ? n.dl.length * 16 : 0);
+    rad[n.id] = Math.max(w, hh * 1.3) / 2 + 22;
+  });
+  var iters = nodes.length > 130 ? 70 : 140;
+  for (var it = 0; it < iters; it++) {
+    for (var i = 0; i < nodes.length; i++) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var a = pos[nodes[i].id], b = pos[nodes[j].id];
+        var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        var minD = rad[nodes[i].id] + rad[nodes[j].id];
+        if (d < minD) { var push = (minD - d) / 2, ux = dx / d, uy = dy / d; a.x -= ux * push; a.y -= uy * push; b.x += ux * push; b.y += uy * push; }
+      }
+    }
+    edges.forEach(function(e) {
+      var a = pos[e.source], b = pos[e.target]; if (!a || !b) return;
+      var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      var rest = rad[e.source] + rad[e.target] + 150, f = (d - rest) * 0.025, ux = dx / d, uy = dy / d;
+      a.x += ux * f; a.y += uy * f; b.x -= ux * f; b.y -= uy * f;
+    });
   }
-  place(root, 0, Math.PI * 2, 0);
-  return nodes.map(function(n) { return Object.assign({}, n, pos[n.id] || { x: 0, y: 0 }); });
+  return nodes.map(function(n) { return Object.assign({}, n, { x: pos[n.id].x, y: pos[n.id].y }); });
 }
 
 function extractMediaCards(laid, r) {
@@ -304,12 +306,14 @@ export default function App(){
   var _stDesc=useState(""),stDesc=_stDesc[0],setStDesc=_stDesc[1];
   /* ── Study / exposure modes (full · grow · review · soil) ── */
   var _study=useState("full"),studyMode=_study[0],setStudyMode=_study[1];
+  var _uiMode=useState("build"),uiMode=_uiMode[0],setUiMode=_uiMode[1];
   var _studyOpen=useState(false),studyOpen=_studyOpen[0],setStudyOpen=_studyOpen[1];
   var _growStep=useState(0),growStep=_growStep[0],setGrowStep=_growStep[1];
   var _growPlay=useState(false),growPlay=_growPlay[0],setGrowPlay=_growPlay[1];
   var _growSpeed=useState(900),growSpeed=_growSpeed[0],setGrowSpeed=_growSpeed[1];
   var _revealed=useState(null),revealed=_revealed[0],setRevealed=_revealed[1];
   var _soilLinks=useState(false),soilLinks=_soilLinks[0],setSoilLinks=_soilLinks[1];
+  var _soilDef=useState("brief"),soilDef=_soilDef[0],setSoilDef=_soilDef[1];
   var _focusEdge=useState(null),focusEdge=_focusEdge[0],setFocusEdge=_focusEdge[1];
   var _fullscreen=useState(false),fullscreen=_fullscreen[0],setFullscreen=_fullscreen[1];
   var _contentMenu=useState(false),contentMenu=_contentMenu[0],setContentMenu=_contentMenu[1];
@@ -646,21 +650,23 @@ export default function App(){
       h("span",{onClick:function(){setView('home');},style:{fontSize:16,fontWeight:700,cursor:'pointer',background:"linear-gradient(135deg,#6C5CE7,#00B8A9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"✦ Mycel"),
       h("nav",{style:{display:"flex",gap:2}},tabs.map(function(k){return h("button",{key:k,onClick:function(){setView(k);},style:{padding:"4px 10px",borderRadius:6,border:"none",cursor:"pointer",background:view===k?BG:"transparent",color:view===k?TXT:DIM,fontSize:13,fontWeight:500}},k.charAt(0).toUpperCase()+k.slice(1));}))),
     view==='graph'?h("div",{style:{display:"flex",gap:2,alignItems:"center"}},
-      h("span",{style:{fontSize:11,color:linkFrom?"#A29BFE":DIM,marginRight:6}},linkFrom?"click target…":(tool==='link'?"click a node…":vn.length+"·"+ve.length)),
-      [{k:'select',t:'Select (V)'},{k:'hand',t:'Pan (H)'},{k:'magnify',t:'Zoom (M)'},{k:'lasso',t:'Group select (G)'},{k:'link',t:'Connect (L)'},{k:'draw',t:'Draw (D)'},{k:'eraser',t:'Erase (E)'}].map(function(b){return h("button",{key:b.k,title:b.t,onClick:function(){setTool(b.k);if(b.k!=='link'){setLinkFrom(null);setLinkPos(null);}},style:{padding:"5px 7px",borderRadius:5,border:tool===b.k?"1px solid "+TXT+"30":"1px solid transparent",background:tool===b.k?BG:"transparent",color:tool===b.k?TXT:DIM,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center"}},IC(b.k));}),
-      tool==='draw'?["#A29BFE","#5EECD5","#F0A08A","#FDCB6E","#FD79A8"].map(function(c){return h("div",{key:c,onClick:function(){setDrawColor(c);},style:{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",outline:drawColor===c?"2px solid "+TXT:"none",outlineOffset:1,marginLeft:1}});}):null,
-      h("div",{style:{width:1,height:14,background:BRD,margin:"0 4px"}}),
-      h("button",{title:"Add node",onClick:addNode,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:TXT,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('plus')),
-      h("button",{title:"Tidy layout (organize radially)",onClick:tidyLayout,style:{padding:"5px 9px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:DIM,cursor:"pointer",fontSize:12,fontWeight:600}},"Tidy"),
-      h("button",{title:"Add content block",onClick:function(){setContentMenu(!contentMenu);},style:{padding:"5px 9px",borderRadius:5,border:contentMenu?"1px solid #FDCB6E":"1px solid "+BRD,background:contentMenu?"rgba(253,203,110,0.12)":"transparent",color:contentMenu?"#FDCB6E":DIM,cursor:"pointer",fontSize:12,fontWeight:600}},"+ Content"),
-      h("button",{title:"Undo",onClick:undo,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:hist.past.length?TXT:DIM,cursor:"pointer",opacity:hist.past.length?1:0.4,display:"inline-flex",alignItems:"center"}},IC('undo')),
-      h("button",{title:"Redo",onClick:redo,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:hist.future.length?TXT:DIM,cursor:"pointer",opacity:hist.future.length?1:0.4,display:"inline-flex",alignItems:"center"}},IC('redo')),
+      h("div",{style:{display:"flex",border:"1px solid "+BRD,borderRadius:6,overflow:"hidden",marginRight:6}},[["build","Build"],["study","Study"]].map(function(um){return h("button",{key:um[0],onClick:function(){setUiMode(um[0]);if(um[0]==='build'){setStudyMode('full');setStudyOpen(false);setTool('select');}else{setStudyOpen(true);setTool('select');setContentMenu(false);}},style:{padding:"4px 12px",border:"none",background:uiMode===um[0]?(um[0]==='study'?"rgba(0,184,169,0.18)":"rgba(162,155,254,0.18)"):"transparent",color:uiMode===um[0]?(um[0]==='study'?"#00B8A9":"#A29BFE"):DIM,fontSize:12,fontWeight:600,cursor:"pointer"}},um[1]);})),
+      uiMode==='build'?h("span",{style:{fontSize:11,color:linkFrom?"#A29BFE":DIM,marginRight:6}},linkFrom?"click target…":(tool==='link'?"click a node…":vn.length+"·"+ve.length)):h("span",{style:{fontSize:11,color:DIM,marginRight:6}},studyMode.charAt(0).toUpperCase()+studyMode.slice(1)+" mode"),
+      uiMode==='build'?h(React.Fragment,null,
+        [{k:'select',t:'Select (V)'},{k:'hand',t:'Pan (H)'},{k:'magnify',t:'Zoom (M)'},{k:'lasso',t:'Group select (G)'},{k:'link',t:'Connect (L)'},{k:'draw',t:'Draw (D)'},{k:'eraser',t:'Erase (E)'}].map(function(b){return h("button",{key:b.k,title:b.t,onClick:function(){setTool(b.k);if(b.k!=='link'){setLinkFrom(null);setLinkPos(null);}},style:{padding:"5px 7px",borderRadius:5,border:tool===b.k?"1px solid "+TXT+"30":"1px solid transparent",background:tool===b.k?BG:"transparent",color:tool===b.k?TXT:DIM,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center"}},IC(b.k));}),
+        tool==='draw'?["#A29BFE","#5EECD5","#F0A08A","#FDCB6E","#FD79A8"].map(function(c){return h("div",{key:c,onClick:function(){setDrawColor(c);},style:{width:14,height:14,borderRadius:"50%",background:c,cursor:"pointer",outline:drawColor===c?"2px solid "+TXT:"none",outlineOffset:1,marginLeft:1}});}):null,
+        h("div",{key:"d1",style:{width:1,height:14,background:BRD,margin:"0 4px"}}),
+        h("button",{key:"addn",title:"Add node",onClick:addNode,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:TXT,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('plus')),
+        h("button",{key:"tidy",title:"Tidy layout (separate overlaps)",onClick:tidyLayout,style:{padding:"5px 9px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:DIM,cursor:"pointer",fontSize:12,fontWeight:600}},"Tidy"),
+        h("button",{key:"cont",title:"Add content block",onClick:function(){setContentMenu(!contentMenu);},style:{padding:"5px 9px",borderRadius:5,border:contentMenu?"1px solid #FDCB6E":"1px solid "+BRD,background:contentMenu?"rgba(253,203,110,0.12)":"transparent",color:contentMenu?"#FDCB6E":DIM,cursor:"pointer",fontSize:12,fontWeight:600}},"+ Content"),
+        h("button",{key:"undo",title:"Undo",onClick:undo,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:hist.past.length?TXT:DIM,cursor:"pointer",opacity:hist.past.length?1:0.4,display:"inline-flex",alignItems:"center"}},IC('undo')),
+        h("button",{key:"redo",title:"Redo",onClick:redo,style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:hist.future.length?TXT:DIM,cursor:"pointer",opacity:hist.future.length?1:0.4,display:"inline-flex",alignItems:"center"}},IC('redo'))
+      ):null,
       h("div",{style:{width:1,height:14,background:BRD,margin:"0 4px"}}),
       h("button",{title:"Export JSON",onClick:function(){if(mapId)window.open(apiUrl()+"/api/maps/"+mapId+"/export","_blank");},style:{padding:"5px 7px",borderRadius:5,border:"1px solid "+BRD,background:"transparent",color:DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('download')),
       h("button",{title:fullscreen?"Exit full screen":"Full screen",onClick:function(){setFullscreen(!fullscreen);},style:{padding:"5px 7px",borderRadius:5,border:fullscreen?"1px solid #A29BFE":"1px solid "+BRD,background:fullscreen?"rgba(162,155,254,0.12)":"transparent",color:fullscreen?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('fit')),
       h("button",{title:"PDF split view",onClick:function(){setRefer(!referMode);},style:{padding:"5px 7px",borderRadius:5,border:referMode?"1px solid #A29BFE":"1px solid "+BRD,background:referMode?"rgba(162,155,254,0.12)":"transparent",color:referMode?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('split')),
       referMode?h("div",{style:{display:"flex",border:"1px solid "+BRD,borderRadius:5,overflow:"hidden"}},[["graph","Graph"],["list","List"]].map(function(sr){return h("button",{key:sr[0],onClick:function(){setSplitRight(sr[0]);localStorage.setItem("mycel_splitright",sr[0]);},style:{padding:"4px 8px",border:"none",background:splitRight===sr[0]?"rgba(162,155,254,0.18)":"transparent",color:splitRight===sr[0]?"#A29BFE":DIM,fontSize:11,cursor:"pointer"}},sr[1]);})):null,
-      h("button",{title:"Study modes",onClick:function(){setStudyOpen(!studyOpen);},style:{padding:"5px 9px",borderRadius:5,border:(studyOpen||studyMode!=='full')?"1px solid #00B8A9":"1px solid "+BRD,background:(studyOpen||studyMode!=='full')?"rgba(0,184,169,0.12)":"transparent",color:(studyOpen||studyMode!=='full')?"#00B8A9":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center",fontSize:12,fontWeight:600}},studyMode==='full'?"Study":(studyMode.charAt(0).toUpperCase()+studyMode.slice(1))),
       mapId?h("span",{title:"Edits autosave",style:{fontSize:10,color:saveSt==='saving'?"#FDCB6E":(saveSt==='saved'?"#51CF66":DIM),marginRight:4,alignSelf:"center"}},saveSt==='saving'?"Saving…":(saveSt==='saved'?"Saved":"")):null,
       h("button",{title:"Settings",onClick:function(){setShowSettings(!showSettings);},style:{padding:"5px 7px",borderRadius:5,border:showSettings?"1px solid #A29BFE":"1px solid "+BRD,background:showSettings?"rgba(162,155,254,0.12)":"transparent",color:showSettings?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('settings')),
       h("button",{title:"Find concept",onClick:function(){setShowSearch(!showSearch);},style:{padding:"5px 7px",borderRadius:5,border:showSearch?"1px solid #A29BFE":"1px solid "+BRD,background:showSearch?"rgba(162,155,254,0.12)":"transparent",color:showSearch?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('search'))
@@ -848,12 +854,12 @@ export default function App(){
         h("g",{transform:"translate("+(c.w/2)+","+(-c.h/2)+")",style:{cursor:"pointer"},onPointerDown:function(ev){ev.stopPropagation();setData(function(dd){return Object.assign({},dd,{cards:(dd.cards||[]).filter(function(x){return x.id!==c.id;})});});}},h("circle",{r:9,fill:"#FF6B6B"}),h("path",{d:"M-3 -3L3 3M3 -3L-3 3",stroke:"#fff",strokeWidth:1.6,strokeLinecap:"round"})));}),
       Object.keys(ep).map(function(k){return ep[k];}).reduce(function(a,b){return a.concat(b);},[]).map(function(e,i){var s=nm[e.source],t=nm[e.target];if(!s||!t)return null;if(!dispSet.has(e.source)||!dispSet.has(e.target))return null;if(studyMode==='soil'&&!soilLinks)return null;var ekey=e.source+'>'+e.target+'>'+e.relation_type;if(studyMode==='grow'&&growReveal&&!growReveal.es.has(ekey))return null;var cat=edgeCat(e.relation_type),st=P.edges[cat]||P.edges.custom;var thick=st.w*(0.5+(e.confidence||0.5)*0.5);var hi=selId===e.source||selId===e.target||hovId===e.source||hovId===e.target||(focusEdge&&((focusEdge.s===e.source&&focusEdge.t===e.target)||(focusEdge.s===e.target&&focusEdge.t===e.source)));var path=(cat==='compositional'||cat==='pedagogical')?sPath(s.x,s.y,t.x,t.y):edgePath(s.x,s.y,t.x,t.y,e.idx,ep[[e.source,e.target].sort().join('|')].length);var tr="translate("+cam.x+","+cam.y+") scale("+cam.z+")";var dash=lineMode==='solid'?"":(lineMode==='dashed'?"9 5":st.dash);return h("g",{key:"e"+i},hi?h("path",{d:path,fill:"none",stroke:st.color,strokeWidth:thick+7,opacity:0.12,transform:tr}):null,h("path",Object.assign({d:path,fill:"none",stroke:st.color,strokeWidth:hi?thick*1.5:thick,opacity:(studyMode==='soil'&&soilLinks)?0.3:(hi?0.9:0.55),transform:tr,strokeLinecap:"round",markerEnd:(arrowsOn&&ARROW_CATS.has(cat))?"url(#ah)":""},studyMode==='grow'?{pathLength:"1",strokeDasharray:"1",style:{animation:"growDraw "+(Math.max(150,growSpeed)/1000)+"s ease both"}}:{strokeDasharray:dash})));}),
       linkFrom&&linkPos&&nm[linkFrom]?h("path",{key:"linkline",d:"M"+nm[linkFrom].x+" "+nm[linkFrom].y+" L"+linkPos.x+" "+linkPos.y,fill:"none",stroke:"#A29BFE",strokeWidth:2,strokeDasharray:"6 5",opacity:0.85,transform:"translate("+cam.x+","+cam.y+") scale("+cam.z+")"}):null,
-      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var soil=studyMode==='soil';var llines=masked?["• • •"]:(n.ll||[]);var dl=((soil||showD)&&!masked)?(n.dl||[]):[];if(soil&&dl.length>4)dl=dl.slice(0,4);var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
+      dispNodes.map(function(n){var t=tcolor(n.concept_type);var isSel=selId===n.id,isHov=hovId===n.id;var masked=studyMode==='review'&&revealed&&!revealed.has(n.id);var soil=studyMode==='soil';var llines=masked?["• • •"]:(n.ll||[]);var dl=((soil||showD)&&!masked)?(n.dl||[]):[];if(soil){if(soilDef==='off'&&!isSel)dl=[];else if(soilDef==='brief'&&!isSel)dl=dl.slice(0,3);}var totalH=(n.lh||30)+(dl.length?dl.length*16+20:0);var sx2=n.x*cam.z+cam.x,sy2=n.y*cam.z+cam.y;var lSz=Math.round(impSize(n.id,14)*fontScale),dSz=Math.round(impSize(n.id,10)*fontScale);var shp=shapeForType(n.concept_type);var sbox=shapeBox(shp,n.w,totalH);
         return h("g",{key:n.id,transform:"translate("+sx2+","+sy2+") scale("+cam.z+")",style:{cursor:tool==='select'||tool==='magnify'?'pointer':'inherit',animation:studyMode==='grow'?('growFade '+(Math.max(150,growSpeed)/1000)+'s ease both'):undefined},
           onClick:function(ev){ev.stopPropagation();if(studyMode==='review'){setRevealed(function(s){var n2=new Set(s||[]);n2.add(n.id);return n2;});return;}if(tool==='magnify')zoomTo(n.id);else if(tool==='select'){if(ev.shiftKey){toggleSelNode(n.id);return;}setFocusEdge(null);setSel(selId===n.id?null:n.id);}},
           onPointerDown:function(ev){if(studyMode==='review'){return;}if(tool==='magnify'){zoomTo(n.id);ev.stopPropagation();ev.preventDefault();return;}if(tool!=='select')return;ev.stopPropagation();var rc=cRef.current?cRef.current.getBoundingClientRect():null;if(!rc)return;var nbrs=getNeighbors(n.id,edges);var off={};Object.keys(nbrs).forEach(function(id){off[id]={dx:(nm[id]?nm[id].x:0)-n.x,dy:(nm[id]?nm[id].y:0)-n.y};});setDrag({t:'c',nid:n.id,nbrs:nbrs,sx:ev.clientX-rc.left,sy:ev.clientY-rc.top,ox:n.x,oy:n.y,off:off});ev.preventDefault();}},
           (selSet&&selSet.has(n.id))?h("rect",{x:-n.w/2-7,y:-totalH/2-7,width:n.w+14,height:totalH+14,rx:14,fill:"none",stroke:"#FDCB6E",strokeWidth:2,strokeDasharray:"5 4"}):null,
-          (!shapesOn)?h("rect",{x:-n.w/2-8,y:-totalH/2-8,width:n.w+16,height:totalH+16,rx:12,fill:SURF,stroke:soil?t.a:BRD,strokeWidth:soil?0.8:0.5,opacity:soil?0.92:0.78}):null,
+          (!shapesOn&&!soil)?h("rect",{x:-n.w/2-8,y:-totalH/2-8,width:n.w+16,height:totalH+16,rx:12,fill:SURF,stroke:BRD,strokeWidth:0.5,opacity:0.78}):null,
           shapesOn?shapeEl(shp,sbox.w,sbox.h,{fill:masked?P.surface:t.b,stroke:isSel?t.a:t.s,strokeWidth:isSel?2.5:(isHov?1.6:1.1),opacity:isSel?1:0.92}):null,
           (!shapesOn&&isSel)?h("rect",{x:-n.w/2-6,y:-totalH/2-6,width:n.w+12,height:totalH+12,rx:14,fill:SURF,stroke:t.a,strokeWidth:2,opacity:0.95}):null,
           (!shapesOn&&isHov&&!isSel)?h("rect",{x:-n.w/2-4,y:-totalH/2-4,width:n.w+8,height:totalH+8,rx:12,fill:"none",stroke:t.a,strokeWidth:1,opacity:0.3,strokeDasharray:"4 3"}):null,
@@ -938,7 +944,10 @@ export default function App(){
       studyMode==='soil'?h("div",null,
         h("div",{style:{fontSize:11,color:MUT,lineHeight:1.5,marginBottom:6}},"Spatial mode: definitions show inline and links are hidden (still stored) — like mycelium under soil. Group concepts and content blocks by position; reveal links when you want."),
         h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},h("span",{style:{fontSize:11,color:MUT}},"Show hidden links"),h("button",{onClick:function(){setSoilLinks(!soilLinks);},style:{padding:"2px 10px",borderRadius:10,fontSize:10,cursor:"pointer",border:"1px solid "+(soilLinks?"rgba(0,184,169,0.4)":BRD),background:soilLinks?"rgba(0,184,169,0.15)":"transparent",color:soilLinks?"#00B8A9":DIM}},soilLinks?"On":"Off")),
-        h("div",{style:{fontSize:10,color:DIM,marginTop:6}},"Add definitions, formulas, tables and images from the + Content button."),
+        h("div",{style:{fontSize:11,color:MUT,marginTop:8,marginBottom:3}},"Definitions"),
+        h("div",{style:{display:"flex",gap:4,marginBottom:6}},[["off","Off"],["brief","Brief"],["full","Full"]].map(function(dd){return h("button",{key:dd[0],onClick:function(){setSoilDef(dd[0]);},style:{flex:1,padding:"4px 0",borderRadius:6,fontSize:11,cursor:"pointer",border:"1px solid "+(soilDef===dd[0]?"#00B8A9":BRD),background:soilDef===dd[0]?"rgba(0,184,169,0.15)":"transparent",color:soilDef===dd[0]?"#00B8A9":DIM}},dd[1]);})),
+        h("div",{style:{fontSize:10,color:DIM,marginBottom:6}},"Click any concept to expand its full definition."),
+        h("div",{style:{fontSize:10,color:DIM,marginTop:2}},"Add definitions, formulas, tables and images from the + Content button."),
         h("button",{onClick:tidyLayout,style:Object.assign({width:"100%",marginTop:6},B("#00B8A9","rgba(0,184,169,0.12)"))},"Tidy layout")):null,
       studyMode==='grow'?h("div",null,
         h("div",{style:{fontSize:11,color:MUT,marginBottom:6}},"Watch the map build the way it connects — parents grow a link and the child emerges at the tip; opposing or equivalent ideas appear together, then link. Step "+Math.min(growStep,growEvents.length)+" / "+growEvents.length+"."),

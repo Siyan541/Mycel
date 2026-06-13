@@ -47,6 +47,7 @@ export default function PDFViewer(props) {
 
   var _pdf = useState(null), pdfDoc = _pdf[0], setPdfDoc = _pdf[1];
   var _pages = useState([]), pages = _pages[0], setPages = _pages[1];
+  var renderedRef = useRef({});
   var _currentPage = useState(1), currentPage = _currentPage[0], setCurrentPage = _currentPage[1];
   var _scale = useState(1.2), scale = _scale[0], setScale = _scale[1];
   var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
@@ -72,6 +73,7 @@ export default function PDFViewer(props) {
     }
 
     var loadPdf = function(source) {
+      renderedRef.current = {}; setPages([]); setPageText({});
       var loadingTask = pdfjsLib.getDocument(source);
       loadingTask.promise.then(function(pdf) {
         setPdfDoc(pdf);
@@ -127,9 +129,11 @@ export default function PDFViewer(props) {
     var newPages = [];
     var renderNext = function(pageNum) {
       if (pageNum > endPage || pageNum > pdf.numPages) {
-        setPages(function(prev) { return prev.concat(newPages); });
+        if (newPages.length) setPages(function(prev) { var seen = {}; var all = prev.concat(newPages); var dedup = []; for (var i = 0; i < all.length; i++) { if (!seen[all[i].pageNum]) { seen[all[i].pageNum] = 1; dedup.push(all[i]); } } dedup.sort(function(a, b) { return a.pageNum - b.pageNum; }); return dedup; });
         return;
       }
+      if (renderedRef.current[pageNum]) { renderNext(pageNum + 1); return; }  // already rendered / in-flight
+      renderedRef.current[pageNum] = true;
       pdf.getPage(pageNum).then(function(page) {
         var viewport = page.getViewport({ scale: scale });
         var canvas = document.createElement('canvas');
@@ -137,7 +141,6 @@ export default function PDFViewer(props) {
         canvas.height = viewport.height;
         var ctx = canvas.getContext('2d');
         page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function() {
-          // Capture text layer (fractional coords) for highlighting + auto-linking
           page.getTextContent().then(function(tc) {
             var items = [];
             for (var ti = 0; ti < tc.items.length; ti++) {
@@ -148,17 +151,12 @@ export default function PDFViewer(props) {
               var x = tx[4], yTop = tx[5] - fh, w = (it.width || 0) * viewport.scale;
               items.push({ str: it.str, fx: x / viewport.width, fy: yTop / viewport.height, fw: w / viewport.width, fh: fh / viewport.height });
             }
-            setPageText(function(prev) { var n = Object.assign({}, prev); n[pageNum] = { items: items }; return n; });
+            setPageText(function(prev) { if (prev[pageNum] && prev[pageNum]._concat != null) return prev; var n = Object.assign({}, prev); n[pageNum] = { items: items }; return n; });
           }).catch(function() {});
-          newPages.push({
-            pageNum: pageNum,
-            dataUrl: canvas.toDataURL(),
-            width: viewport.width,
-            height: viewport.height,
-          });
+          newPages.push({ pageNum: pageNum, dataUrl: canvas.toDataURL(), width: viewport.width, height: viewport.height });
           renderNext(pageNum + 1);
         });
-      });
+      }).catch(function() { renderNext(pageNum + 1); });
     };
     renderNext(startPage);
   };
@@ -194,12 +192,12 @@ export default function PDFViewer(props) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       setCurrentPage(pageNum);
     } else if (pdfDoc && pageNum <= pdfDoc.numPages) {
-      // Page not rendered yet — render it first
-      renderPages(pdfDoc, pages.length + 1, pageNum);
+      // Page not rendered yet — fill everything up to it (guard dedupes), then scroll
+      renderPages(pdfDoc, 1, pageNum);
       setTimeout(function() {
         var el2 = pdfContainerRef.current.querySelector('[data-page="' + pageNum + '"]');
         if (el2) el2.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 1000);
+      }, 1200);
     }
   }, [pdfDoc, pages.length]);
 
