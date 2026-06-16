@@ -206,6 +206,9 @@ export default function PDFViewer(props) {
 
   var _nf = useState(null), notFound = _nf[0], setNotFound = _nf[1];
   var _rnf = useState(false), relNF = _rnf[0], setRelNF = _rnf[1];
+  var _scope = useState('sentence'), scope = _scope[0], setScope = _scope[1];   // sentence | paragraph
+  var _seldrag = useState(null), selDrag = _seldrag[0], setSelDrag = _seldrag[1];
+  var _mdef = useState(true), marginDef = _mdef[0], setMarginDef = _mdef[1];
 
   // ── Matching primitives ───────────────────────────────────
   var STOP = { the:1,a:1,an:1,of:1,to:1,in:1,on:1,and:1,or:1,is:1,are:1,was:1,were:1,be:1,by:1,for:1,with:1,as:1,at:1,it:1,its:1,this:1,that:1,these:1,those:1,from:1,which:1,we:1,can:1,will:1,not:1,but:1,if:1,then:1,so:1,such:1,into:1,than:1,also:1,may:1,each:1,any:1,all:1,one:1,two:1,their:1,they:1,has:1,have:1,had:1,where:1,when:1,how:1,what:1,more:1,most:1,some:1,other:1,using:1,used:1,use:1,between:1,within:1,about:1 };
@@ -238,11 +241,23 @@ export default function PDFViewer(props) {
   };
   var paragraphsOf = function(pt) {
     if (pt._paras) return pt._paras;
-    var items = pt.items.slice().sort(function(a, b) { return (a.fy - b.fy) || (a.fx - b.fx); });
-    var lines = [], cur = null;
-    for (var i = 0; i < items.length; i++) { var it = items[i]; if (cur && Math.abs(it.fy - cur.fy) < (cur.fh || 0.012) * 0.8) { cur.items.push(it); } else { cur = { fy: it.fy, fh: it.fh || 0.012, items: [it] }; lines.push(cur); } }
-    var paras = [], pc = null;
-    for (var j = 0; j < lines.length; j++) { var ln = lines[j]; if (pc && (ln.fy - pc.lastFy) < (ln.fh * 2.2)) { pc.items = pc.items.concat(ln.items); pc.lastFy = ln.fy; } else { pc = { items: ln.items.slice(), lastFy: ln.fy }; paras.push(pc); } }
+    var all = pt.items.slice();
+    // detect up to 2 columns: look for a wide vertical gutter near the middle
+    var groups = [all];
+    try {
+      var xs = all.map(function(it) { return it.fx + it.fw / 2; }).sort(function(a, b) { return a - b; });
+      var gap = 0, at = 0.5;
+      for (var gi = 1; gi < xs.length; gi++) { var g = xs[gi] - xs[gi - 1]; if (xs[gi - 1] > 0.32 && xs[gi] < 0.68 && g > gap) { gap = g; at = (xs[gi] + xs[gi - 1]) / 2; } }
+      if (gap > 0.12) { groups = [all.filter(function(it) { return it.fx + it.fw / 2 < at; }), all.filter(function(it) { return it.fx + it.fw / 2 >= at; })]; }
+    } catch (e) {}
+    var paras = [];
+    groups.forEach(function(items) {
+      items = items.slice().sort(function(a, b) { return (a.fy - b.fy) || (a.fx - b.fx); });
+      var lines = [], cur = null;
+      for (var i = 0; i < items.length; i++) { var it = items[i]; if (cur && Math.abs(it.fy - cur.fy) < (cur.fh || 0.012) * 0.8) { cur.items.push(it); } else { cur = { fy: it.fy, fh: it.fh || 0.012, items: [it] }; lines.push(cur); } }
+      var pc = null;
+      for (var j = 0; j < lines.length; j++) { var ln = lines[j]; if (pc && (ln.fy - pc.lastFy) < (ln.fh * 2.2)) { pc.items = pc.items.concat(ln.items); pc.lastFy = ln.fy; } else { pc = { items: ln.items.slice(), lastFy: ln.fy }; paras.push(pc); } }
+    });
     paras.forEach(function(p) { p.text = p.items.map(function(x) { return x.str.toLowerCase(); }).join(' '); });
     pt._paras = paras; return paras;
   };
@@ -266,9 +281,10 @@ export default function PDFViewer(props) {
     var k, pg, pt, loc;
     // build a FULL-sentence highlight (fall back to the whole paragraph for fragments)
     var build = function(pg, pt, loc, col) {
+      if (scope === 'paragraph') { var pi = paraContaining(pt, loc.s); if (pi && pi.length) return { page: pg, boxes: pi, color: col }; }
       var ex = expandSentence(pt, loc.s, loc.e);
       var boxes = itemsInRange(pt, ex.a, ex.b);
-      if (boxes.length < 3) { var pi = paraContaining(pt, loc.s); if (pi && pi.length > boxes.length) boxes = pi; }
+      if (boxes.length < 3) { var pp = paraContaining(pt, loc.s); if (pp && pp.length > boxes.length) boxes = pp; }
       return { page: pg, boxes: boxes, color: col };
     };
     if (node.source_quote) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, node.source_quote); if (loc) return build(pg, pt, loc, col); } }
@@ -277,7 +293,7 @@ export default function PDFViewer(props) {
     var toks = sigTokens(node.label).filter(function(t) { return !COMMON[t]; }); if (!toks.length) toks = sigTokens(node.label);
     if (toks.length) { toks.sort(function(a, b) { return tokenPages(a) - tokenPages(b); }); var tk = toks[0]; for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; var wi = wordIdx(pt, tk); if (wi >= 0) return build(pg, pt, { s: wi, e: wi + tk.length }, col); } }
     return null;
-  }, [selectedId, nodes, pageText, palette]);
+  }, [selectedId, nodes, pageText, palette, scope]);
 
   // The paragraph that supports the FOCUSED link (prefers both endpoints, never empty if either is present)
   var relationHit = useMemo(function() {
@@ -363,6 +379,16 @@ export default function PDFViewer(props) {
     onAnn(function(prev) { return prev.concat([{ id: id, page: pageNum, kind: 'note', fx: fx, fy: fy, fw: 0.02, fh: 0.02, color: annColor, note: '' }]); });
     setTimeout(function() { setEditAnn({ id: id, note: '' }); setNoteText(''); }, 0);
   };
+  // Highlight/underline a whole dragged range of words (optionally linking to the selected concept)
+  var addAnnotationRange = function(pageNum, i0, i1) {
+    if (!onAnn) return;
+    var items = pageText[pageNum] ? pageText[pageNum].items : []; if (!items.length) return;
+    var lo = Math.min(i0, i1), hi = Math.max(i0, i1);
+    var kind = (annTool === 'underline') ? 'underline' : 'mark';
+    var stamp = Date.now(), add = [];
+    for (var i = lo; i <= hi && i < items.length; i++) { var it = items[i]; if (!it.str || !it.str.trim()) continue; add.push({ id: 'ann_' + stamp + '_' + i, page: pageNum, kind: kind, fx: it.fx, fy: it.fy, fw: it.fw, fh: it.fh, color: annColor, note: '', concept: selectedId || null }); }
+    if (add.length) onAnn(function(prev) { return prev.concat(add); });
+  };
   // Live-update a note as the user types (auto-save)
   var liveNote = function(id, text) {
     setNoteText(text);
@@ -397,6 +423,10 @@ export default function PDFViewer(props) {
     return out;
   };
 
+  // colour a concept-linked annotation by the concept's current type colour
+  var typeColOf = function(id) { if (!id) return null; var nn = null; for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === id) { nn = nodes[i]; break; } } return (nn && palette && palette.types && palette.types[nn.concept_type]) ? palette.types[nn.concept_type].a : null; };
+  var selNode = (function() { for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) return nodes[i]; } return null; })();
+
   // RENDER
   return h('div', { style: { display: 'flex', height: '100%', background: BG } },
 
@@ -417,6 +447,8 @@ export default function PDFViewer(props) {
               return h('button', { key: tt[0], title: tt[2], onClick: function() { if (annOn && annTool === tt[0]) { setAnnOn(false); } else { setAnnOn(true); setAnnTool(tt[0]); } }, style: { display: 'inline-flex', padding: 6, border: 'none', borderRadius: 6, background: active ? annColor : 'transparent', color: active ? '#1a1a1a' : DIM, cursor: 'pointer' } }, PIC(tt[1], 16));
             })) : null,
           (onAnn && annOn) ? h('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } }, ['#FDCB6E', '#FF8FA3', '#7DE2D1', '#A29BFE'].map(function(c) { return h('div', { key: c, title: 'Colour', onClick: function() { setAnnColor(c); }, style: { width: 15, height: 15, borderRadius: '50%', background: c, cursor: 'pointer', outline: annColor === c ? '2px solid ' + TXT : 'none', outlineOffset: 1 } }); })) : null,
+          h('div', { style: { display: 'flex', border: '1px solid ' + BRD, borderRadius: 7, overflow: 'hidden' } }, [['sentence', 'Sent.'], ['paragraph', 'Para.']].map(function(sc) { return h('button', { key: sc[0], title: 'Highlight scope: ' + sc[0], onClick: function() { setScope(sc[0]); }, style: { padding: '4px 7px', border: 'none', background: scope === sc[0] ? 'rgba(162,155,254,0.18)' : 'transparent', color: scope === sc[0] ? '#A29BFE' : DIM, fontSize: 11, cursor: 'pointer' } }, sc[1]); })),
+          h('button', { title: marginDef ? 'Hide margin definition' : 'Show definition in margin', onClick: function() { setMarginDef(!marginDef); }, style: { display: 'inline-flex', padding: 6, background: marginDef ? 'rgba(162,155,254,0.12)' : 'transparent', border: '1px solid ' + (marginDef ? '#A29BFE' : BRD), borderRadius: 7, color: marginDef ? '#A29BFE' : DIM, cursor: 'pointer', fontSize: 11, fontWeight: 600 } }, 'Def'),
           h('div', { style: { width: 1, height: 18, background: BRD, margin: '0 2px' } }),
           h('button', { title: 'Zoom out', onClick: function() { setScale(function(s) { return Math.max(0.5, s - 0.2); }); }, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: TXT, cursor: 'pointer' } }, PIC('minus', 15)),
           h('span', { style: { fontSize: 11, color: DIM, minWidth: 30, textAlign: 'center' } }, Math.round(scale * 100) + '%'),
@@ -425,7 +457,7 @@ export default function PDFViewer(props) {
       ),
       (notFound && notFound === selectedId) ? h('div', { style: { fontSize: 11, color: '#FDCB6E', padding: '5px 12px', background: 'rgba(253,203,110,0.08)', borderBottom: '1px solid ' + BRD } }, 'This concept could not be located in the source text — it may be inferred or paraphrased.') : null,
       relNF ? h('div', { style: { fontSize: 11, color: '#00B8A9', padding: '5px 12px', background: 'rgba(0,184,169,0.08)', borderBottom: '1px solid ' + BRD } }, 'This relationship is not stated together in one passage — it may be inferred across the text.') : null,
-      (onAnn && annOn) ? h('div', { style: { fontSize: 11, color: DIM, padding: '4px 12px', background: SURF, borderBottom: '1px solid ' + BRD } }, annTool === 'note' ? 'Click anywhere on the page to drop a note.' : 'Click words to ' + (annTool === 'underline' ? 'underline' : 'highlight') + ' them. Click a mark to add a comment.') : null,
+      (onAnn && annOn) ? h('div', { style: { fontSize: 11, color: DIM, padding: '4px 12px', background: SURF, borderBottom: '1px solid ' + BRD } }, annTool === 'note' ? 'Click anywhere on the page to drop a note.' : ('Drag across text to ' + (annTool === 'underline' ? 'underline' : 'highlight') + ' it' + (selNode ? ' (linked to "' + selNode.label + '")' : '') + '. Click a mark to comment.')) : null,
       // PDF pages container
       h('div', { ref: pdfContainerRef, onScroll: onScroll, style: { flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },
         loading
@@ -452,21 +484,26 @@ export default function PDFViewer(props) {
                   // Page image
                   h('img', { src: page.dataUrl, style: { width: '100%', maxWidth: page.width, borderRadius: 4, boxShadow: '0 2px 12px rgba(0,0,0,0.15)', display: 'block' } }),
                   // Text-layer overlay: concept/relation highlights + clickable terms + user annotations
-                  h('div', { onClick: function(e) { if (annOn && annTool === 'note' && e.target === e.currentTarget) { var r = e.currentTarget.getBoundingClientRect(); addPin(page.pageNum, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); } }, style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: annOn ? 'auto' : 'none', cursor: annOn ? (annTool === 'note' ? 'cell' : 'text') : 'default' } },
+                  h('div', { onClick: function(e) { if (annOn && annTool === 'note' && e.target === e.currentTarget) { var r = e.currentTarget.getBoundingClientRect(); addPin(page.pageNum, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); } }, onMouseUp: function() { if (selDrag && selDrag.page === page.pageNum) { if (selDrag.a !== selDrag.b) { addAnnotationRange(page.pageNum, selDrag.a, selDrag.b); } else if (annTool !== 'note') { var its = pageText[page.pageNum] ? pageText[page.pageNum].items : []; if (its[selDrag.a]) toggleAnnotation(page.pageNum, its[selDrag.a]); } setSelDrag(null); } }, onMouseLeave: function() { if (selDrag) setSelDrag(null); }, style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, pointerEvents: annOn ? 'auto' : 'none', cursor: annOn ? (annTool === 'note' ? 'cell' : 'text') : 'default' } },
                     // concept highlight: a soft continuous marker band over the whole sentence (type colour, no border)
                     mergeLines(hlBoxes(page.pageNum)).map(function(b, i) { var col = (conceptHit && conceptHit.color) || '#A29BFE'; return h('div', { key: 'h' + i, style: { position: 'absolute', left: ((b.fx - 0.002) * 100) + '%', top: ((b.fy - b.fh * 0.12) * 100) + '%', width: ((b.fw + 0.004) * 100) + '%', height: (b.fh * 1.18 * 100) + '%', background: col + '38', borderRadius: 3, pointerEvents: 'none' } }); }),
                     // relation: one continuous underline at the baseline of each line (no fill)
                     mergeLines(relBoxes(page.pageNum)).map(function(b, i) { return h('div', { key: 'r' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: ((b.fy + b.fh * 0.96) * 100) + '%', width: (b.fw * 100) + '%', height: 0, borderBottom: '2.5px solid #00B8A9', pointerEvents: 'none' } }); }),
-                    // user annotations: highlight = fill only; underline = baseline line only; note = pin
+                    // live drag-selection preview
+                    (selDrag && selDrag.page === page.pageNum && pageText[page.pageNum]) ? mergeLines((function() { var its = pageText[page.pageNum].items, lo = Math.min(selDrag.a, selDrag.b), hi = Math.max(selDrag.a, selDrag.b), o = []; for (var z = lo; z <= hi && z < its.length; z++) o.push(its[z]); return o; })()).map(function(b, i) { return h('div', { key: 'sd' + i, style: { position: 'absolute', left: (b.fx * 100) + '%', top: ((b.fy - b.fh * 0.12) * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 1.18 * 100) + '%', background: annColor + '55', borderRadius: 2, pointerEvents: 'none' } }); }) : null,
+                    // user annotations: concept-linked ones recolour by type; highlight = fill, underline = baseline, note = pin
                     annotations.filter(function(a) { return a.page === page.pageNum; }).map(function(a) {
-                      if (a.kind === 'note') return h('div', { key: a.id, title: a.note || 'Note', onClick: function(e) { e.stopPropagation(); setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: 18, height: 18, marginLeft: -9, marginTop: -9, borderRadius: '50% 50% 50% 2px', background: a.color, cursor: 'pointer', pointerEvents: 'auto', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' } });
-                      if (a.kind === 'underline') return h('div', { key: a.id, title: a.note || 'Click to add a note', onClick: function(e) { e.stopPropagation(); if (!annOn && a.concept && onSelectConcept) { onSelectConcept(a.concept); return; } setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: ((a.fy + a.fh * 0.96) * 100) + '%', width: (a.fw * 100) + '%', height: 0, borderBottom: '2.5px solid ' + a.color, cursor: 'pointer', pointerEvents: 'auto' } });
-                      return h('div', { key: a.id, title: a.note || 'Click to add a note', onClick: function(e) { e.stopPropagation(); if (!annOn && a.concept && onSelectConcept) { onSelectConcept(a.concept); return; } setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: ((a.fy - a.fh * 0.12) * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 1.18 * 100) + '%', background: a.color + '48', borderRadius: 3, cursor: 'pointer', pointerEvents: 'auto' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: a.color, border: '1px solid ' + SURF } }) : null);
+                      var col = (a.concept && typeColOf(a.concept)) || a.color;
+                      if (a.kind === 'note') return h('div', { key: a.id, title: a.note || 'Note', onClick: function(e) { e.stopPropagation(); setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: (a.fy * 100) + '%', width: 18, height: 18, marginLeft: -9, marginTop: -9, borderRadius: '50% 50% 50% 2px', background: col, cursor: 'pointer', pointerEvents: 'auto', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' } });
+                      if (a.kind === 'underline') return h('div', { key: a.id, title: a.note || (a.concept ? 'Linked concept — click to open' : 'Click to add a note'), onClick: function(e) { e.stopPropagation(); if (!annOn && a.concept && onSelectConcept) { onSelectConcept(a.concept); return; } setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: ((a.fy + a.fh * 0.96) * 100) + '%', width: (a.fw * 100) + '%', height: 0, borderBottom: '2.5px solid ' + col, cursor: 'pointer', pointerEvents: 'auto' } });
+                      return h('div', { key: a.id, title: a.note || (a.concept ? 'Linked concept — click to open' : 'Click to add a note'), onClick: function(e) { e.stopPropagation(); if (!annOn && a.concept && onSelectConcept) { onSelectConcept(a.concept); return; } setEditAnn(a); setNoteText(a.note || ''); }, style: { position: 'absolute', left: (a.fx * 100) + '%', top: ((a.fy - a.fh * 0.12) * 100) + '%', width: (a.fw * 100) + '%', height: (a.fh * 1.18 * 100) + '%', background: col + '48', borderRadius: 3, cursor: 'pointer', pointerEvents: 'auto' } }, a.note ? h('div', { style: { position: 'absolute', top: -5, right: -5, width: 8, height: 8, borderRadius: '50%', background: col, border: '1px solid ' + SURF } }) : null);
                     }),
-                    // annotate mode: click a word to mark it
-                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onClick: function(e) { e.stopPropagation(); if (annTool === 'note') { addPin(page.pageNum, it.fx + it.fw / 2, it.fy); } else { toggleAnnotation(page.pageNum, it); } }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
+                    // annotate mode: drag across words to mark a range (or click a single word)
+                    annOn ? (pageText[page.pageNum] ? pageText[page.pageNum].items : []).map(function(it, i) { return h('div', { key: 'w' + i, onMouseDown: function(e) { e.stopPropagation(); if (annTool === 'note') { addPin(page.pageNum, it.fx + it.fw / 2, it.fy); return; } setSelDrag({ page: page.pageNum, a: i, b: i }); }, onMouseEnter: function() { if (selDrag && selDrag.page === page.pageNum) setSelDrag(function(s) { return s ? Object.assign({}, s, { b: i }) : s; }); }, style: { position: 'absolute', left: (it.fx * 100) + '%', top: (it.fy * 100) + '%', width: (it.fw * 100) + '%', height: (it.fh * 100) + '%', cursor: 'text', pointerEvents: 'auto' } }); }) : null,
                     // auto-link: clickable, but NOT decorated (no clutter over the text)
-                    !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function(e) { e.stopPropagation(); if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null),
+                    !annOn ? linkBoxes(page.pageNum).map(function(b, i) { return h('div', { key: 'a' + i, title: 'Open this concept', onClick: function(e) { e.stopPropagation(); if (onSelectConcept) onSelectConcept(b.nodeId); }, style: { position: 'absolute', left: (b.fx * 100) + '%', top: (b.fy * 100) + '%', width: (b.fw * 100) + '%', height: (b.fh * 100) + '%', cursor: 'pointer', pointerEvents: 'auto' } }); }) : null,
+                    // definition pinned in the margin beside the matched sentence
+                    (marginDef && conceptHit && conceptHit.page === page.pageNum && selNode && selNode.description && conceptHit.boxes.length) ? h('div', { style: { position: 'absolute', right: 6, top: (Math.max(0.02, conceptHit.boxes[0].fy - 0.01) * 100) + '%', width: 188, maxWidth: '42%', background: SURF + 'F2', border: '1px solid ' + ((conceptHit.color) || BRD), borderRadius: 8, padding: '7px 9px', fontSize: 11, lineHeight: 1.4, color: TXT, zIndex: 3, boxShadow: '0 3px 12px rgba(0,0,0,0.18)', pointerEvents: 'none' } }, h('div', { style: { fontWeight: 700, marginBottom: 3, color: conceptHit.color || TXT } }, selNode.label), h('div', { style: { color: DIM } }, selNode.description.length > 220 ? selNode.description.slice(0, 220) + '…' : selNode.description)) : null),
                   // Concept markers for this page
                   conceptsByPage[page.pageNum]
                     ? h('div', { style: { position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 2 } },

@@ -77,6 +77,7 @@ def attach_provenance(nodes, pdf_path):
         lab_tokens = set(_toks(label))
         desc_tokens = set(_toks(desc))
         if not lab_tokens and not desc_tokens:
+            _set(n, "in_text", False)
             continue
         best, best_score, best_pi = None, 0, None
         # strong signal: a sentence that literally contains the full label phrase
@@ -89,20 +90,24 @@ def attach_provenance(nodes, pdf_path):
             sc += 1 * len(desc_tokens & sl)
             if sc > best_score:
                 best, best_score, best_pi = s, sc, pi
+        # a label-phrase or 2+ token sentence match = the concept is genuinely defined here
+        grounded = bool(best) and (best_score >= 6 or (best_score >= 4 and lab_l and lab_l in best.lower()))
         if best and best_score >= 2:
             _set(n, "source_page", best_pi + 1)
             _set(n, "source_quote", best[:240])
+            _set(n, "in_text", grounded)
             continue
-        # fallback: first page containing any distinctive label token
+        # fallback: first page containing any distinctive label token (weak — likely a prerequisite)
+        found_page = False
         for t in _toks(label):
-            done = False
             for i, lt in enumerate(low):
                 if t in lt:
                     _set(n, "source_page", i + 1)
-                    done = True
+                    found_page = True
                     break
-            if done:
+            if found_page:
                 break
+        _set(n, "in_text", False)   # not grounded in a definition sentence -> prerequisite/inferred
     return nodes
 
 
