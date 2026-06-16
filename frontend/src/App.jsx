@@ -62,36 +62,74 @@ var REL_TYPES=["IMPLIES","REQUIRES","CONTRADICTS","EQUIVALENT","GENERALIZES","SP
 var BASE_TYPES=["theory","principle","definition","method","example","evidence","argument","term","framework","phenomenon"];
 
 /* ── Turn backend-extracted media (per-concept image/formula/table, or top-level figures) into content blocks ── */
-/* ── Organic relaxation: keep the natural force-layout shape, but push apart any
-   overlapping concepts (esp. the crowded ring around a hub) and gently hold
-   linked concepts near each other. No rigid tree. ── */
-function organizedLayout(nodes, edges) {
+/* ── Definition-aware spacing helpers ── */
+function defLinesShown(n, density) {
+  if (!n.dl || !n.dl.length) return 0;
+  if (density === 'off') return 0;
+  if (density === 'brief') return Math.min(3, n.dl.length);
+  return n.dl.length; // 'full'
+}
+function nodeHalf(n, density, pad) {
+  var lines = defLinesShown(n, density);
+  var hh = (n.lh || 30) + (lines ? lines * 16 + 20 : 0);
+  return { hw: (n.w || 160) / 2 + pad, hh: hh / 2 + pad };
+}
+/* Rectangle (AABB) separation: pushes apart any two boxes that actually overlap,
+   sized to the DISPLAYED definition height. Preserves arrangement; collision only. */
+function separateOverlaps(nodes, density, iters) {
+  if (!nodes || nodes.length < 2) return nodes;
+  var pos = {}, H = {};
+  nodes.forEach(function(n) { pos[n.id] = { x: n.x || 0, y: n.y || 0 }; H[n.id] = nodeHalf(n, density, 14); });
+  iters = iters || 80;
+  for (var it = 0; it < iters; it++) {
+    var moved = false;
+    for (var i = 0; i < nodes.length; i++) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var a = pos[nodes[i].id], b = pos[nodes[j].id], ha = H[nodes[i].id], hb = H[nodes[j].id];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var ox = (ha.hw + hb.hw) - Math.abs(dx), oy = (ha.hh + hb.hh) - Math.abs(dy);
+        if (ox > 0 && oy > 0) {
+          moved = true;
+          if (ox < oy) { var sx = (dx < 0 ? -1 : 1) * ox / 2; a.x -= sx; b.x += sx; }
+          else { var sy = (dy < 0 ? -1 : 1) * oy / 2; a.y -= sy; b.y += sy; }
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  return nodes.map(function(n) { return Object.assign({}, n, { x: pos[n.id].x, y: pos[n.id].y }); });
+}
+
+/* ── Organic layout: natural shape via light edge springs, but rectangle-based
+   collision sized to the displayed definition height so text never overlaps. ── */
+function organizedLayout(nodes, edges, density) {
   if (!nodes || nodes.length < 2) return (nodes || []).map(function(n) { return Object.assign({}, n, { x: n.x || 0, y: n.y || 0 }); });
-  var pos = {}, rad = {};
+  density = density || 'brief';
+  var pos = {}, H = {};
   nodes.forEach(function(n) {
     pos[n.id] = { x: (n.x || 0) || (Math.random() * 600 - 300), y: (n.y || 0) || (Math.random() * 600 - 300) };
-    var w = n.w || 160, hh = (n.lh || 30) + ((n.dl && n.dl.length) ? n.dl.length * 16 : 0);
-    rad[n.id] = Math.max(w, hh * 1.3) / 2 + 22;
+    H[n.id] = nodeHalf(n, density, 16);
   });
   var iters = nodes.length > 130 ? 70 : 140;
   for (var it = 0; it < iters; it++) {
     for (var i = 0; i < nodes.length; i++) {
       for (var j = i + 1; j < nodes.length; j++) {
-        var a = pos[nodes[i].id], b = pos[nodes[j].id];
-        var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        var minD = rad[nodes[i].id] + rad[nodes[j].id];
-        if (d < minD) { var push = (minD - d) / 2, ux = dx / d, uy = dy / d; a.x -= ux * push; a.y -= uy * push; b.x += ux * push; b.y += uy * push; }
+        var a = pos[nodes[i].id], b = pos[nodes[j].id], ha = H[nodes[i].id], hb = H[nodes[j].id];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var ox = (ha.hw + hb.hw) - Math.abs(dx), oy = (ha.hh + hb.hh) - Math.abs(dy);
+        if (ox > 0 && oy > 0) { if (ox < oy) { var sx = (dx < 0 ? -1 : 1) * ox / 2; a.x -= sx; b.x += sx; } else { var sy = (dy < 0 ? -1 : 1) * oy / 2; a.y -= sy; b.y += sy; } }
       }
     }
     edges.forEach(function(e) {
       var a = pos[e.source], b = pos[e.target]; if (!a || !b) return;
       var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      var rest = rad[e.source] + rad[e.target] + 150, f = (d - rest) * 0.025, ux = dx / d, uy = dy / d;
+      var rest = H[e.source].hw + H[e.target].hw + 150, f = (d - rest) * 0.022, ux = dx / d, uy = dy / d;
       a.x += ux * f; a.y += uy * f; b.x -= ux * f; b.y -= uy * f;
     });
   }
   return nodes.map(function(n) { return Object.assign({}, n, { x: pos[n.id].x, y: pos[n.id].y }); });
 }
+
 
 function extractMediaCards(laid, r) {
   var out = [];
@@ -416,7 +454,17 @@ export default function App(){
     });
     return events;
   },[nodes,edges]);
-  var tidyLayout=function(){var laid=organizedLayout(nodes,edges);var pos={};laid.forEach(function(n){pos[n.id]={x:n.x,y:n.y};});setData(function(d){return Object.assign({},d,{nodes:d.nodes.map(function(n){return pos[n.id]?Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}):n;})});});setTimeout(function(){fit(laid);},40);};
+  var curDensity=function(){return studyMode==='soil'?soilDef:'brief';};
+  var tidyLayout=function(){var laid=organizedLayout(nodes,edges,curDensity());var pos={};laid.forEach(function(n){pos[n.id]={x:n.x,y:n.y};});setData(function(d){return Object.assign({},d,{nodes:d.nodes.map(function(n){return pos[n.id]?Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}):n;})});});setTimeout(function(){fit(laid);},40);};
+  var firstSpace=useRef(true);
+  useEffect(function(){
+    if(firstSpace.current){firstSpace.current=false;return;}
+    if(!nodes.length)return;
+    var laid=separateOverlaps(nodes,studyMode==='soil'?soilDef:'brief',90);var pos={},moved=false;
+    laid.forEach(function(n){pos[n.id]={x:n.x,y:n.y};});
+    nodes.forEach(function(n){var p=pos[n.id];if(p&&(Math.abs(p.x-n.x)>0.5||Math.abs(p.y-n.y)>0.5))moved=true;});
+    if(moved)setData(function(d){return Object.assign({},d,{nodes:d.nodes.map(function(n){return pos[n.id]?Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}):n;})});});
+  },[soilDef,studyMode]);
   var soilTidy=tidyLayout;
   var enterStudy=function(m){
     setStudyMode(m);setStudyOpen(true);setSel(null);
@@ -440,7 +488,9 @@ export default function App(){
     if(saveTimer.current)clearTimeout(saveTimer.current);
     saveTimer.current=setTimeout(function(){
       setSaveSt('saving');
-      saveMapGraph(mapId,{nodes:nodes,edges:edges,drawings:drawings,cards:cards,pdfAnn:pdfAnn,groups:groups}).then(function(){setSaveSt('saved');}).catch(function(){setSaveSt('idle');});
+      var st={nodes:nodes,edges:edges,drawings:drawings,cards:cards,pdfAnn:pdfAnn,groups:groups};
+      try{localStorage.setItem('mycel_state_'+mapId,JSON.stringify(st));}catch(e){}
+      saveMapGraph(mapId,st).then(function(){setSaveSt('saved');}).catch(function(){setSaveSt('saved');});
     },1500);
     return function(){if(saveTimer.current)clearTimeout(saveTimer.current);};
   },[D,mapId,view]);
@@ -517,7 +567,7 @@ export default function App(){
     uploadPDF(file,{textOnly:textOnly}).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
-        var laid=organizedLayout(organicLayout(r.nodes,edgesN),edgesN);var mcards=(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r));dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}});
+        var laid=organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');var mcards=(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r));dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}});
         setMapId(r.map_id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
         if(r.map_id)saveMapGraph(r.map_id,{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}).catch(function(){});
         setProg({stage:'done',progress:1,message:r.node_count+' concepts, '+r.edge_count+' relations'});
@@ -530,7 +580,13 @@ export default function App(){
   var loadMap=function(id){getMap(id).then(function(r){if(r.nodes){
     var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
     var hasPos=r.nodes.length&&r.nodes.every(function(n){return typeof n.x==='number'&&typeof n.y==='number';});
-    var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):organizedLayout(organicLayout(r.nodes,edgesN),edgesN);
+    // local backup wins when the backend hasn't persisted positions/edits yet
+    var backup=null;if(!hasPos){try{var raw=localStorage.getItem('mycel_state_'+id);if(raw)backup=JSON.parse(raw);}catch(e){}}
+    if(backup&&backup.nodes&&backup.nodes.length){
+      dispatch({type:'INIT',data:{nodes:backup.nodes,edges:backup.edges||edgesN,drawings:backup.drawings||[],cards:backup.cards||[],pdfAnn:backup.pdfAnn||[],groups:backup.groups||{}}});
+      setMapId(id);setView('graph');setColl(new Set());setTimeout(function(){fit(backup.nodes);},80);return;
+    }
+    var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');
     var savedCards=(r.cards||[]);
     var cards2=savedCards.length?savedCards:(textOnly?[]:extractMediaCards(laid,r));
     dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:(r.drawings||[]),cards:cards2,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:(r.groups||{})}});

@@ -205,6 +205,7 @@ export default function PDFViewer(props) {
   useEffect(function() { pageTextRef.current = pageText; }, [pageText]);
 
   var _nf = useState(null), notFound = _nf[0], setNotFound = _nf[1];
+  var _rnf = useState(false), relNF = _rnf[0], setRelNF = _rnf[1];
 
   // ── Matching primitives ───────────────────────────────────
   var STOP = { the:1,a:1,an:1,of:1,to:1,in:1,on:1,and:1,or:1,is:1,are:1,was:1,were:1,be:1,by:1,for:1,with:1,as:1,at:1,it:1,its:1,this:1,that:1,these:1,those:1,from:1,which:1,we:1,can:1,will:1,not:1,but:1,if:1,then:1,so:1,such:1,into:1,than:1,also:1,may:1,each:1,any:1,all:1,one:1,two:1,their:1,they:1,has:1,have:1,had:1,where:1,when:1,how:1,what:1,more:1,most:1,some:1,other:1,using:1,used:1,use:1,between:1,within:1,about:1 };
@@ -247,6 +248,13 @@ export default function PDFViewer(props) {
   };
   var tokenPages = function(tok) { var pt2 = pageTextRef.current, keys = Object.keys(pt2), c = 0; for (var i = 0; i < keys.length; i++) { pageConcat(pt2[keys[i]]); if (pt2[keys[i]]._concat.indexOf(tok) >= 0) c++; } return c || 999; };
   var pageOrder = function(prefer) { var pt2 = pageText; var keys = Object.keys(pt2).map(function(k) { return parseInt(k); }).sort(function(a, b) { return a - b; }); if (prefer && pt2[prefer]) keys = [prefer].concat(keys.filter(function(k) { return k !== prefer; })); return keys; };
+  // items of the paragraph that contains a given character index
+  var paraContaining = function(pt, charIdx) {
+    pageConcat(pt); var ii = pt._map[Math.min(Math.max(0, charIdx), pt._map.length - 1)]; var target = pt.items[ii];
+    var paras = paragraphsOf(pt);
+    for (var i = 0; i < paras.length; i++) { if (paras[i].items.indexOf(target) >= 0) return paras[i].items; }
+    return null;
+  };
 
   // Where does the SELECTED concept live, and which run of text defines it?
   var conceptHit = useMemo(function() {
@@ -255,30 +263,44 @@ export default function PDFViewer(props) {
     if (!node) return null;
     var col = (palette && palette.types && palette.types[node.concept_type]) ? palette.types[node.concept_type].a : '#A29BFE';
     var order = pageOrder(node.source_page);
-    var k, pg, pt, loc, ex;
-    // 1) backend verbatim definition quote — exact locate
-    if (node.source_quote) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, node.source_quote); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b), color: col }; } } }
-    // 2) the FULL label phrase incl. numbers ("theorem 3.3"), not the word "theorem"
+    var k, pg, pt, loc;
+    // build a FULL-sentence highlight (fall back to the whole paragraph for fragments)
+    var build = function(pg, pt, loc, col) {
+      var ex = expandSentence(pt, loc.s, loc.e);
+      var boxes = itemsInRange(pt, ex.a, ex.b);
+      if (boxes.length < 3) { var pi = paraContaining(pt, loc.s); if (pi && pi.length > boxes.length) boxes = pi; }
+      return { page: pg, boxes: boxes, color: col };
+    };
+    if (node.source_quote) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, node.source_quote); if (loc) return build(pg, pt, loc, col); } }
     var label = normWS(node.label);
-    if (label.length >= 3) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, label); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b), color: col }; } } }
-    // 3) rarest distinctive token (never a generic word like "theorem")
+    if (label.length >= 3) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, label); if (loc) return build(pg, pt, loc, col); } }
     var toks = sigTokens(node.label).filter(function(t) { return !COMMON[t]; }); if (!toks.length) toks = sigTokens(node.label);
-    if (toks.length) { toks.sort(function(a, b) { return tokenPages(a) - tokenPages(b); }); var tk = toks[0]; for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; var wi = wordIdx(pt, tk); if (wi >= 0) { ex = expandSentence(pt, wi, wi + tk.length); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b), color: col }; } } }
+    if (toks.length) { toks.sort(function(a, b) { return tokenPages(a) - tokenPages(b); }); var tk = toks[0]; for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; var wi = wordIdx(pt, tk); if (wi >= 0) return build(pg, pt, { s: wi, e: wi + tk.length }, col); } }
     return null;
   }, [selectedId, nodes, pageText, palette]);
 
-  // Where is the paragraph that supports the FOCUSED link?
+  // The paragraph that supports the FOCUSED link (prefers both endpoints, never empty if either is present)
   var relationHit = useMemo(function() {
     if (!focusEdge) return null;
-    var k, pg, pt, loc, ex;
-    var order = pageOrder(focusEdge.source_page);
-    // 1) backend evidence sentence — exact locate, expand to its paragraph
-    if (focusEdge.evidence) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, focusEdge.evidence); if (loc) { ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: itemsInRange(pt, ex.a, ex.b) }; } } }
-    // 2) the paragraph where BOTH endpoints co-occur
+    var order = pageOrder(focusEdge.source_page), k, pg, pt, loc;
+    if (focusEdge.evidence) { for (k = 0; k < order.length; k++) { pg = order[k]; pt = pageText[pg]; if (!pt) continue; loc = locate(pt, focusEdge.evidence); if (loc) { var pi = paraContaining(pt, loc.s); var ex = expandSentence(pt, loc.s, loc.e); return { page: pg, boxes: pi || itemsInRange(pt, ex.a, ex.b) }; } } }
     var sa = sigTokens(focusEdge.sourceLabel).filter(function(t) { return !COMMON[t]; });
     var sb = sigTokens(focusEdge.targetLabel).filter(function(t) { return !COMMON[t]; });
-    if (sa.length && sb.length) { var keys = Object.keys(pageText).map(function(x) { return parseInt(x); }).sort(function(a, b) { return a - b; }); for (k = 0; k < keys.length; k++) { pg = keys[k]; pt = pageText[pg]; var paras = paragraphsOf(pt); for (var p = 0; p < paras.length; p++) { var txt = paras[p].text; var hasA = sa.some(function(t) { return txt.indexOf(t) >= 0; }); var hasB = sb.some(function(t) { return txt.indexOf(t) >= 0; }); if (hasA && hasB) return { page: pg, boxes: paras[p].items }; } } }
-    return null;
+    if (!sa.length && !sb.length) return null;
+    var keys = Object.keys(pageText).map(function(x) { return parseInt(x); }).sort(function(a, b) { return a - b; });
+    var best = null, bestScore = 0, bestPg = null;
+    for (k = 0; k < keys.length; k++) {
+      pg = keys[k]; pt = pageText[pg]; var paras = paragraphsOf(pt);
+      for (var p = 0; p < paras.length; p++) {
+        var txt = paras[p].text;
+        var ca = sa.filter(function(t) { return txt.indexOf(t) >= 0; }).length;
+        var cb = sb.filter(function(t) { return txt.indexOf(t) >= 0; }).length;
+        if (!ca && !cb) continue;
+        var score = (ca > 0 && cb > 0 ? 100 : 0) + ca + cb;   // strongly prefer paragraphs with BOTH
+        if (score > bestScore) { bestScore = score; best = paras[p].items; bestPg = pg; }
+      }
+    }
+    return best ? { page: bestPg, boxes: best } : null;
   }, [focusEdge, pageText]);
 
   // Scroll + announce when a concept is selected
@@ -297,7 +319,9 @@ export default function PDFViewer(props) {
 
   // Scroll to the supporting paragraph when a link is focused
   useEffect(function() {
-    if (!focusEdge || !relationHit) return;
+    if (!focusEdge) { setRelNF(false); return; }
+    if (!relationHit) { setRelNF(true); return; }
+    setRelNF(false);
     var pg = relationHit.page;
     scrollToPage(pg);
     setTimeout(function() {
@@ -400,6 +424,7 @@ export default function PDFViewer(props) {
         )
       ),
       (notFound && notFound === selectedId) ? h('div', { style: { fontSize: 11, color: '#FDCB6E', padding: '5px 12px', background: 'rgba(253,203,110,0.08)', borderBottom: '1px solid ' + BRD } }, 'This concept could not be located in the source text — it may be inferred or paraphrased.') : null,
+      relNF ? h('div', { style: { fontSize: 11, color: '#00B8A9', padding: '5px 12px', background: 'rgba(0,184,169,0.08)', borderBottom: '1px solid ' + BRD } }, 'This relationship is not stated together in one passage — it may be inferred across the text.') : null,
       (onAnn && annOn) ? h('div', { style: { fontSize: 11, color: DIM, padding: '4px 12px', background: SURF, borderBottom: '1px solid ' + BRD } }, annTool === 'note' ? 'Click anywhere on the page to drop a note.' : 'Click words to ' + (annTool === 'underline' ? 'underline' : 'highlight') + ' them. Click a mark to add a comment.') : null,
       // PDF pages container
       h('div', { ref: pdfContainerRef, onScroll: onScroll, style: { flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },
