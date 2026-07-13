@@ -30,6 +30,7 @@ export default function PDFViewer(props) {
   var onSelectConcept = props.onSelectConcept;
   var selectedId = props.selectedId;
   var palette = props.palette;
+  var onSetReference = props.onSetReference;   // (conceptId, page, quoteText) -> set a concept's source reference
   var onClose = props.onClose;
   var darkMode = props.darkMode;
   // panel: 'pdf' (PDF only), 'list' (concept list only), 'both' (side by side).
@@ -224,7 +225,7 @@ export default function PDFViewer(props) {
     pt._concat = s; pt._map = map; return pt;
   };
   var locate = function(pt, phrase) { pageConcat(pt); var p = normWS(phrase); if (p.length < 3) return null; var idx = pt._concat.indexOf(p); if (idx < 0) return null; return { s: idx, e: idx + p.length }; };
-  var wordIdx = function(pt, tok) { pageConcat(pt); var re = new RegExp('(^|[^a-z0-9])' + esc(tok) + '([^a-z0-9]|$)'); var m = re.exec(pt._concat); if (!m) return -1; return m.index + m[1].length; };
+  var wordIdx = function(pt, tok) { pageConcat(pt); var re = new RegExp('(^|[^a-z0-9])' + esc(tok) + '(s|es|ing|ed)?([^a-z0-9]|$)'); var m = re.exec(pt._concat); if (!m) return -1; return m.index + m[1].length; };
   var expandSentence = function(pt, cs, ce) { var s = pt._concat, a = cs, b = ce; var lim = 0; while (a > 0 && '.?!\n'.indexOf(s[a - 1]) < 0 && lim < 400) { a--; lim++; } lim = 0; while (b < s.length && '.?!'.indexOf(s[b]) < 0 && lim < 400) { b++; lim++; } if (b < s.length) b++; return { a: a, b: b }; };
   var itemsInRange = function(pt, ca, cb) { var seen = {}, out = []; for (var k = ca; k <= cb && k < pt._map.length; k++) { var idx = pt._map[k]; if (!seen[idx]) { seen[idx] = 1; out.push(pt.items[idx]); } } return out; };
   // collapse a set of word-boxes into one continuous span per text line
@@ -388,6 +389,8 @@ export default function PDFViewer(props) {
     var stamp = Date.now(), add = [];
     for (var i = lo; i <= hi && i < items.length; i++) { var it = items[i]; if (!it.str || !it.str.trim()) continue; add.push({ id: 'ann_' + stamp + '_' + i, page: pageNum, kind: kind, fx: it.fx, fy: it.fy, fw: it.fw, fh: it.fh, color: annColor, note: '', concept: selectedId || null }); }
     if (add.length) onAnn(function(prev) { return prev.concat(add); });
+    // if a concept is selected, make this selection its source reference (drives auto-scroll/highlight)
+    if (selectedId && onSetReference) { var quote = []; for (var q = lo; q <= hi && q < items.length; q++) quote.push(items[q].str); onSetReference(selectedId, pageNum, quote.join(' ').replace(/\s+/g, ' ').trim()); }
   };
   // Live-update a note as the user types (auto-save)
   var liveNote = function(id, text) {
@@ -427,6 +430,32 @@ export default function PDFViewer(props) {
   var typeColOf = function(id) { if (!id) return null; var nn = null; for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === id) { nn = nodes[i]; break; } } return (nn && palette && palette.types && palette.types[nn.concept_type]) ? palette.types[nn.concept_type].a : null; };
   var selNode = (function() { for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) return nodes[i]; } return null; })();
 
+  var _occi = useState(0), occIdx = _occi[0], setOccIdx = _occi[1];
+  // every place the selected concept appears, so the reader can step through repeats
+  var occurrences = useMemo(function() {
+    if (!selectedId) return [];
+    var node = null; for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
+    if (!node) return [];
+    var label = normWS(node.label);
+    var toks = sigTokens(node.label).filter(function(t) { return !COMMON[t]; });
+    var probe = (label.length >= 3) ? label : (toks[0] || '');
+    if (!probe) return [];
+    var keys = Object.keys(pageText).map(function(x) { return parseInt(x); }).sort(function(a, b) { return a - b; });
+    var out = [];
+    keys.forEach(function(pg) {
+      var pt = pageText[pg]; pageConcat(pt); var hay = pt._concat, idx = hay.indexOf(probe), guard = 0;
+      while (idx >= 0 && guard < 30) { var it = pt.items[pt._map[idx]]; if (it) out.push({ page: pg, fy: it.fy }); idx = hay.indexOf(probe, idx + probe.length); guard++; }
+    });
+    return out;
+  }, [selectedId, nodes, pageText]);
+  useEffect(function() { setOccIdx(0); }, [selectedId]);
+  var gotoOcc = function(n) {
+    if (!occurrences.length) return;
+    var k = ((n % occurrences.length) + occurrences.length) % occurrences.length; setOccIdx(k);
+    var occ = occurrences[k]; scrollToPage(occ.page);
+    setTimeout(function() { var cont = pdfContainerRef.current; if (!cont) return; var pe = cont.querySelector('[data-page="' + occ.page + '"]'); if (!pe) return; cont.scrollTo({ top: Math.max(0, pe.offsetTop + occ.fy * pe.clientHeight - cont.clientHeight * 0.33), behavior: 'smooth' }); }, 650);
+  };
+
   // RENDER
   return h('div', { style: { display: 'flex', height: '100%', background: BG } },
 
@@ -437,7 +466,11 @@ export default function PDFViewer(props) {
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: SURF, borderBottom: '1px solid ' + BRD, gap: 8 } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
           h('button', { title: 'Close PDF', onClick: onClose, style: { display: 'inline-flex', padding: 6, background: 'transparent', border: '1px solid ' + BRD, borderRadius: 7, color: DIM, cursor: 'pointer' } }, PIC('back', 16)),
-          h('span', { style: { fontSize: 12, color: DIM, whiteSpace: 'nowrap' } }, pdfDoc ? (currentPage + ' / ' + pdfDoc.numPages) : '…')
+          h('span', { style: { fontSize: 12, color: DIM, whiteSpace: 'nowrap' } }, pdfDoc ? (currentPage + ' / ' + pdfDoc.numPages) : '…'),
+          (selectedId && occurrences.length > 1) ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 2, marginLeft: 4 } },
+            h('button', { title: 'Previous mention', onClick: function() { gotoOcc(occIdx - 1); }, style: { padding: '2px 6px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: DIM, cursor: 'pointer', fontSize: 12 } }, '‹'),
+            h('span', { style: { fontSize: 11, color: DIM, minWidth: 42, textAlign: 'center' } }, 'ref ' + (occIdx + 1) + '/' + occurrences.length),
+            h('button', { title: 'Next mention', onClick: function() { gotoOcc(occIdx + 1); }, style: { padding: '2px 6px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: DIM, cursor: 'pointer', fontSize: 12 } }, '›')) : null
         ),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
           // annotation tools (icon segmented control)

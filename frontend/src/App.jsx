@@ -1,5 +1,5 @@
 import React,{useState,useMemo,useCallback,useRef,useEffect,useReducer} from"react";
-import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile,getFavorites,renameMap,saveMapGraph,adminMaps,adminUsers,adminStats,generateMap,socraticAsk}from"./api";
+import{uploadPDF,getMaps,getMap,deleteMap,submitCorrection,confirmMap,unconfirmMap,shareMap,getCommunityMaps,upvoteCommunityMap,register,login,getMe,getActivity,getLeaderboard,exportMap,postComment,getComments,postFeedback,updateProfile,getFavorites,renameMap,saveMapGraph,setMapVisibility,adminMaps,adminUsers,adminStats,generateMap,socraticAsk}from"./api";
 import PDFViewer from'./components/PDFViewer.jsx';
 import{PALETTES,edgeCat,typeColor,ARROW_CATS}from"./utils/theme";
 import{organicLayout,edgePath,sPath,wrap,nSize,convexHull,hullPath,getNeighbors}from"./utils/layout";
@@ -248,6 +248,7 @@ export default function App(){
   var _selSet=useState(null),selSet=_selSet[0],setSelSet=_selSet[1];
   var _hov=useState(null),hovId=_hov[0],setHov=_hov[1];
   var _mid=useState(null),mapId=_mid[0],setMapId=_mid[1];
+  var _mvis=useState("private"),mapVis=_mvis[0],setMapVis=_mvis[1];
   var _maps=useState([]),maps=_maps[0],setMaps=_maps[1];
   var _upl=useState(false),uploading=_upl[0],setUpl=_upl[1];
   var _prog=useState(null),prog=_prog[0],setProg=_prog[1];
@@ -570,11 +571,11 @@ export default function App(){
   var handleUpload=function(file){
     if(!file)return;setUpFile(file);
     setUpl(true);setProg({stage:'uploading',progress:0,message:'Uploading...'});
-    uploadPDF(file,{textOnly:textOnly}).then(function(r){
+    uploadPDF(file,{textOnly:textOnly,mode:(pendingMode==='code'?'code':'concept')}).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
         var laid=organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');var mcards=(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r));dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}});
-        setMapId(r.map_id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
+        setMapId(r.map_id);setMapVis('private');setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
         if(r.map_id)saveMapGraph(r.map_id,{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}).catch(function(){});
         setProg({stage:'done',progress:1,message:r.node_count+' concepts, '+r.edge_count+' relations'});
         applyPendingMode();
@@ -590,13 +591,13 @@ export default function App(){
     var backup=null;if(!hasPos){try{var raw=localStorage.getItem('mycel_state_'+id);if(raw)backup=JSON.parse(raw);}catch(e){}}
     if(backup&&backup.nodes&&backup.nodes.length){
       dispatch({type:'INIT',data:{nodes:backup.nodes,edges:backup.edges||edgesN,drawings:backup.drawings||[],cards:backup.cards||[],pdfAnn:backup.pdfAnn||[],groups:backup.groups||{}}});
-      setMapId(id);setView('graph');setColl(new Set());setTimeout(function(){fit(backup.nodes);},80);return;
+      setMapId(id);setMapVis((r&&r.visibility)||'private');setView('graph');setColl(new Set());setTimeout(function(){fit(backup.nodes);},80);return;
     }
     var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');
     var savedCards=(r.cards||[]);
     var cards2=savedCards.length?savedCards:(textOnly?[]:extractMediaCards(laid,r));
     dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:(r.drawings||[]),cards:cards2,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:(r.groups||{})}});
-    setMapId(id);setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
+    setMapId(id);setMapVis((r&&r.visibility)||'private');setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
   }});};
 
   var addNode=function(){if(!cRef.current)return;var cx=(cRef.current.clientWidth/2-cam.x)/cam.z,cy=(cRef.current.clientHeight/2-cam.y)/cam.z;
@@ -730,6 +731,7 @@ export default function App(){
       h("button",{title:fullscreen?"Exit full screen":"Full screen",onClick:function(){setFullscreen(!fullscreen);},style:{padding:"5px 7px",borderRadius:5,border:fullscreen?"1px solid #A29BFE":"1px solid "+BRD,background:fullscreen?"rgba(162,155,254,0.12)":"transparent",color:fullscreen?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('fit')),
       h("button",{title:"PDF split view",onClick:function(){setRefer(!referMode);},style:{padding:"5px 7px",borderRadius:5,border:referMode?"1px solid #A29BFE":"1px solid "+BRD,background:referMode?"rgba(162,155,254,0.12)":"transparent",color:referMode?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('split')),
       referMode?h("div",{style:{display:"flex",border:"1px solid "+BRD,borderRadius:5,overflow:"hidden"}},[["graph","Graph"],["list","List"]].map(function(sr){return h("button",{key:sr[0],onClick:function(){setSplitRight(sr[0]);localStorage.setItem("mycel_splitright",sr[0]);},style:{padding:"4px 8px",border:"none",background:splitRight===sr[0]?"rgba(162,155,254,0.18)":"transparent",color:splitRight===sr[0]?"#A29BFE":DIM,fontSize:11,cursor:"pointer"}},sr[1]);})):null,
+      mapId?h("button",{title:mapVis==='public'?"Public — anyone with the link can view. Click to make private.":"Private — only you. Click to make public.",onClick:function(){var nv=mapVis==='public'?'private':'public';setMapVis(nv);if(mapId)setMapVisibility(mapId,nv).catch(function(){});},style:{padding:"4px 9px",borderRadius:6,border:"1px solid "+(mapVis==='public'?"rgba(81,207,102,0.4)":BRD),background:mapVis==='public'?"rgba(81,207,102,0.12)":"transparent",color:mapVis==='public'?"#51CF66":DIM,cursor:"pointer",fontSize:11,fontWeight:600}},mapVis==='public'?"🌐 Public":"🔒 Private"):null,
       mapId?h("span",{title:"Edits autosave",style:{fontSize:10,color:saveSt==='saving'?"#FDCB6E":(saveSt==='saved'?"#51CF66":DIM),marginRight:4,alignSelf:"center"}},saveSt==='saving'?"Saving…":(saveSt==='saved'?"Saved":"")):null,
       h("button",{title:"Settings",onClick:function(){setShowSettings(!showSettings);},style:{padding:"5px 7px",borderRadius:5,border:showSettings?"1px solid #A29BFE":"1px solid "+BRD,background:showSettings?"rgba(162,155,254,0.12)":"transparent",color:showSettings?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('settings')),
       h("button",{title:"Find concept",onClick:function(){setShowSearch(!showSearch);},style:{padding:"5px 7px",borderRadius:5,border:showSearch?"1px solid #A29BFE":"1px solid "+BRD,background:showSearch?"rgba(162,155,254,0.12)":"transparent",color:showSearch?"#A29BFE":DIM,cursor:"pointer",display:"inline-flex",alignItems:"center"}},IC('search'))
@@ -740,7 +742,7 @@ export default function App(){
   );
 
   /* ── Home ── */
-  var MODES=[["auto","Auto","AI extracts the full map. The fastest start.","#6C5CE7"],["guided","Guided","You give a focus question; AI maps around it, you refine.","#74B9FF"],["socratic","Socratic","After extraction, AI asks open questions — you reason out loud.","#A29BFE"],["manual","Structured","Start from the extracted concepts, then build and label links yourself.","#00B8A9"],["sketch","Free sketch","A blank canvas to draw and arrange ideas loosely — no upload needed.","#FDCB6E"]];
+  var MODES=[["auto","Auto","AI extracts the full map. The fastest start.","#6C5CE7"],["guided","Guided","You give a focus question; AI maps around it, you refine.","#74B9FF"],["socratic","Socratic","After extraction, AI asks open questions — you reason out loud.","#A29BFE"],["manual","Structured","Start from the extracted concepts, then build and label links yourself.","#00B8A9"],["sketch","Free sketch","A blank canvas to draw and arrange ideas loosely — no upload needed.","#FDCB6E"],["code","Code","Map a codebase - functions, types, and how they connect. No LLM needed.","#F7768E"]];
   var homeView=view==='home'?h("div",{key:"hm",style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:18,padding:"40px 20px"}},
     h("h1",{style:{fontSize:28,fontWeight:700,background:"linear-gradient(135deg,#6C5CE7,#00B8A9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Mycel"),
     h("p",{style:{fontSize:15,color:MUT,lineHeight:1.7,maxWidth:440,textAlign:"center"}},"Choose how you want to build, then upload a textbook or notes. Every mode starts from the source so the map has real grounding."),
@@ -748,7 +750,7 @@ export default function App(){
     pendingMode==='guided'?h("input",{value:gTopic,placeholder:"Focus question, e.g. How does refraction relate to wave speed?",onChange:function(e){setGTopic(e.target.value);},style:{width:"100%",maxWidth:560,padding:"10px 14px",background:SURF,border:"1px solid "+BRD,borderRadius:10,color:TXT,fontSize:14,fontFamily:"inherit"}}):null,
     pendingMode==='sketch'?h("button",{onClick:function(){startMap('sketch');},style:Object.assign({width:"100%",maxWidth:560,padding:"16px 0",fontSize:15},B("#FDCB6E","rgba(253,203,110,0.12)"))},"Start a blank canvas"):
     h("div",{onClick:function(){if(!uploading){var el=document.getElementById('fi');if(el)el.click();}},style:{width:"100%",maxWidth:560,border:"2px dashed "+(uploading?"#A29BFE":BRD),borderRadius:14,padding:"26px 20px",textAlign:"center",cursor:uploading?"wait":"pointer",transition:"border-color .2s"}},
-      h("input",{id:"fi",type:"file",accept:".pdf,.docx,.txt,.md,.epub",style:{display:"none"},disabled:uploading,onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
+      h("input",{id:"fi",type:"file",accept:".pdf,.docx,.txt,.md,.epub,.py",style:{display:"none"},disabled:uploading,onChange:function(e){handleUpload(e.target.files?e.target.files[0]:null);}}),
       prog&&prog.stage!=='done'?h("div",null,h("div",{style:{fontSize:15,fontWeight:600,marginBottom:4}},stages[prog.stage]||'Processing...'),h("div",{style:{fontSize:12,color:DIM}},prog.message)):
       h("div",null,h("div",{style:{fontSize:15,fontWeight:600,marginBottom:4}},"Upload to start in "+(MODES.filter(function(m){return m[0]===pendingMode;})[0]||["","Auto"])[1]+" mode"),h("div",{style:{fontSize:12,color:DIM}},"Drop a file or click · PDF, DOCX, TXT, MD, EPUB"),!user?h("div",{style:{fontSize:11,color:DIM,marginTop:6}},"Log in to save maps"):null)),
     h("button",{onClick:function(){setView('library');},style:B(DIM,"transparent")},"Browse library"),
@@ -1102,10 +1104,10 @@ export default function App(){
     referMode&&mapId
       ?(splitRight==='list'
         ?h("div",{key:"splist",style:{display:"flex",flex:1,overflow:"hidden"}},
-          h(PDFViewer,{pdfUrl:apiUrl()+"/api/maps/"+mapId+"/pdf",pdfFile:uploadedFile,nodes:vn,edges:ve,palette:P,selectedId:selId,onSelectConcept:function(id){setSel(id);zoomTo(id);},onClose:function(){setRefer(false);},darkMode:isDark,panel:"both",annotations:pdfAnn,onAnn:setPdfAnn,focusEdge:focusEdge}))
+          h(PDFViewer,{pdfUrl:apiUrl()+"/api/maps/"+mapId+"/pdf",pdfFile:uploadedFile,nodes:vn,edges:ve,palette:P,selectedId:selId,onSelectConcept:function(id){setSel(id);zoomTo(id);},onClose:function(){setRefer(false);},darkMode:isDark,panel:"both",annotations:pdfAnn,onAnn:setPdfAnn,focusEdge:focusEdge,onSetReference:function(cid,pg,q){setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(n){return n.id===cid?Object.assign({},n,{source_page:pg,source_quote:q}):n;})});});}}))
         :h("div",{key:"sp",style:{display:"flex",flex:1,overflow:"hidden"}},
           h("div",{style:{flex:"0 0 50%",overflow:"hidden",borderRight:"1px solid "+BRD}},
-            h(PDFViewer,{pdfUrl:apiUrl()+"/api/maps/"+mapId+"/pdf",pdfFile:uploadedFile,nodes:vn,edges:ve,palette:P,selectedId:selId,onSelectConcept:function(id){setSel(id);zoomTo(id);},onClose:function(){setRefer(false);},darkMode:isDark,panel:"pdf",annotations:pdfAnn,onAnn:setPdfAnn,focusEdge:focusEdge})),
+            h(PDFViewer,{pdfUrl:apiUrl()+"/api/maps/"+mapId+"/pdf",pdfFile:uploadedFile,nodes:vn,edges:ve,palette:P,selectedId:selId,onSelectConcept:function(id){setSel(id);zoomTo(id);},onClose:function(){setRefer(false);},darkMode:isDark,panel:"pdf",annotations:pdfAnn,onAnn:setPdfAnn,focusEdge:focusEdge,onSetReference:function(cid,pg,q){setData(function(dd){return Object.assign({},dd,{nodes:dd.nodes.map(function(n){return n.id===cid?Object.assign({},n,{source_page:pg,source_quote:q}):n;})});});}})),
           h("div",Object.assign({key:"gr2"},graphProps),graphGuts)))
       :h("div",Object.assign({key:"gr"},graphProps),graphGuts)
   ):null;

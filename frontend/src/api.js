@@ -11,10 +11,11 @@ export function updateProfile(dn,bio,theme,lang){return fetch(API+"/api/auth/pro
 export function getActivity(){return fetch(API+"/api/activity",{headers:uh()}).then(function(r){return r.json();});}
 export function getLeaderboard(){return fetch(API+"/api/leaderboard").then(function(r){return r.json();});}
 
-export function uploadFile(file,opts){var f=new FormData();f.append("file",file);var q=(opts&&opts.textOnly)?"?text_only=1":"";return fetch(API+"/api/upload"+q,{method:"POST",body:f,headers:uh()}).then(function(r){return r.json();});}
+export function uploadFile(file,opts){var f=new FormData();f.append("file",file);var pr=[];if(opts&&opts.textOnly)pr.push("text_only=1");if(opts&&opts.mode)pr.push("mode="+encodeURIComponent(opts.mode));var q=pr.length?("?"+pr.join("&")):"";return fetch(API+"/api/upload"+q,{method:"POST",body:f,headers:uh()}).then(function(r){return r.json();});}
 export var uploadPDF=uploadFile;
 export function getMaps(){return fetch(API+"/api/maps",{headers:uh()}).then(function(r){return r.json();});}
 export function getMap(id){return fetch(API+"/api/maps/"+id).then(function(r){return r.json();});}
+export function setMapVisibility(id,vis){return fetch(API+"/api/maps/"+id+"/visibility",{method:"PUT",headers:ah(),body:JSON.stringify({visibility:vis})}).then(function(r){return r.json();});}
 export function exportMap(id){window.open(API+"/api/maps/"+id+"/export","_blank");}
 export function deleteMap(id){return fetch(API+"/api/maps/"+id,{method:"DELETE",headers:uh()}).then(function(r){return r.json();});}
 export function confirmMap(id){return fetch(API+"/api/maps/"+id+"/confirm",{method:"POST",headers:uh()}).then(function(r){return r.json();});}

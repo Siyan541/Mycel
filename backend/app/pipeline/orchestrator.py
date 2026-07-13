@@ -7,7 +7,14 @@ from backend.app.pipeline.validator import validate
 
 logger = logging.getLogger(__name__)
 
-def run(filepath, max_workers=2, progress_cb=None):
+def run(filepath, max_workers=2, progress_cb=None, mode="concept"):
+    if mode == "code":
+        from backend.app.pipeline.code_parser import build_code_graph
+        g = build_code_graph(filepath)
+        g.metadata = dict(getattr(g, "metadata", None) or {})
+        g.metadata["mode"] = "code"
+        return g
+
     logger.info("[parse] Parsing document...")
     skeleton = parse_file(filepath)
     logger.info(f"[parse] {len(skeleton.sections)} sections")

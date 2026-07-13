@@ -27,33 +27,49 @@ class Skeleton(BaseModel):
 class Chunk(BaseModel):
     id: str; section_id: str; section_title: str; text: str
 
+# confidence is now a 0–1 float everywhere (was 1–10 int).
 class Concept(BaseModel):
     label: str; description: str; concept_type: ConceptType
-    abstraction_level: int = Field(ge=0, le=3)
-    confidence: int = Field(ge=1, le=10)
+    abstraction_level: int = Field(ge=0, le=3, default=1)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.7)
     source_quote: str = ""
+    in_text: bool = True                 # False = prerequisite / not defined here
 
 class ConceptResult(BaseModel):
     concepts: list[Concept]
 
+# repaired: single confidence field, no stray required source/target,
+# relation_type back to the enum (matches GraphEdge).
 class Relation(BaseModel):
-    source_label: str; target_label: str
-    relation_type: RelationType
-    justification: str = ""; confidence: int = Field(ge=1, le=10)
-    page: int = 0
+    source_label: str
+    target_label: str
+    relation_type: RelationType = RelationType.REQUIRES
+    justification: str = ""
+    confidence: float = Field(ge=0.0, le=1.0, default=0.6)
     evidence: str = ""
 
 class RelationResult(BaseModel):
     relations: list[Relation]
 
 class GraphNode(BaseModel):
-    id: str; label: str; description: str; concept_type: ConceptType
-    abstraction_level: int; confidence: float
-    cluster: str = ""; source_page: int = 0
+    id: str; label: str; description: str
+    concept_type: str = "term"
+    abstraction_level: int = 1
+    cluster: str = ""
+    confidence: float = 0.7              # 0–1, UI confidence filter
+    source_page: int = 0                 # media.attach_provenance
+    source_quote: str = ""               # verbatim definition sentence
+    source_score: float = 0.0            # provenance match strength 0–1 (explainability)
+    in_text: bool = True                 # False = prerequisite/inferred
+    mentions: list = Field(default_factory=list)   # all ranked source sentences
 
 class GraphEdge(BaseModel):
-    id: str; source_id: str; target_id: str; relation_type: RelationType
-    justification: str; confidence: float
+    id: str; source_id: str; target_id: str
+    relation_type: RelationType
+    justification: str = ""
+    confidence: float                    # 0–1
+    page: int = 0                        # media.attach_relation_provenance
+    evidence: str = ""                   # verbatim relationship sentence
 
 class KnowledgeGraph(BaseModel):
     document_name: str; nodes: list[GraphNode]; edges: list[GraphEdge]
@@ -61,25 +77,14 @@ class KnowledgeGraph(BaseModel):
 
 # ── User & Credit models ──
 class UserLevel(str, Enum):
-    none = "none"
-    beginner = "beginner"
-    experienced = "experienced"
-    expert = "expert"
-    professional = "professional"
-    organizer = "organizer"
+    none="none"; beginner="beginner"; experienced="experienced"
+    expert="expert"; professional="professional"; organizer="organizer"
 
-LEVEL_THRESHOLDS = {
-    "none": 0, "beginner": 1, "experienced": 75,
-    "expert": 300, "professional": 1000, "organizer": 5000
-}
-
-# Professional requires: 1000+ pts, 10+ confirmed maps, 50+ community upvotes
-# Organizer requires: 5000+ pts, 25+ confirmed maps, admin approval
-# These are checked in storage.py get_effective_level()
+LEVEL_THRESHOLDS = {"none":0,"beginner":1,"experienced":75,
+                    "expert":300,"professional":1000,"organizer":5000}
 
 def get_level(points):
-    level = "none"
+    level="none"
     for name, threshold in LEVEL_THRESHOLDS.items():
-        if points >= threshold:
-            level = name
+        if points >= threshold: level = name
     return level

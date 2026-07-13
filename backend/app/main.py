@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Header, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from backend.app.config import UPLOAD_DIR
+from backend.app.config import UPLOAD_DIR, DATA_DIR
 from backend.app.pipeline.orchestrator import run
 from backend.app.services.storage import *
 from backend.app.services.media import extract_media, attach_provenance
@@ -28,8 +28,19 @@ async def root(): return {"status":"ok","version":"3.1.0"}
 
 @app.put("/api/maps/{map_id}/graph")
 async def save_graph(map_id: str, body: dict = Body(...)):
-    ok = update_map_state(map_id, body)
-    return {"status": "saved" if ok else "not_found"}
+    return {"status": "saved" if update_map_state(map_id, body) else "not_found"}
+
+@app.put("/api/maps/{map_id}/visibility")
+async def set_visibility(map_id: str, body: dict = Body(...)):
+    vis = "public" if body.get("visibility") == "public" else "private"
+    g = get_map(map_id)
+    if not g:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    meta = dict(getattr(g, "metadata", None) or {}); meta["visibility"] = vis
+    g.metadata = meta
+    conn = sqlite3.connect(DATA_DIR)
+    conn.execute("UPDATE maps SET graph_json=? WHERE id=?", (g.model_dump_json(), map_id))
+    conn.commit(); conn.close(); return {"status": "ok", "visibility": vis}
 
 # Auth
 @app.post("/api/auth/register")
@@ -59,14 +70,14 @@ async def leaderboard(): return {"users": get_leaderboard()}
 # Maps — PRIVATE
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), force: bool = Query(False),
-                 text_only: bool = Query(False)):
+                 text_only: bool = Query(False), mode: str = Query("concept")):
     if not file.filename.lower().endswith(".pdf"):
         return JSONResponse({"error": "PDF only"}, 400)
     fp = UPLOAD_DIR / file.filename
     with open(fp, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    graph = run(str(fp))
+    graph = run(str(fp), mode=mode)
 
     # (a) make the PDF split-view scroll + highlight work: exact page + verbatim quote
     try:
@@ -98,21 +109,15 @@ async def get_map_data(map_id: str):
         return JSONResponse({"error": "Not found"}, 404)
     meta = g.metadata or {}
     st = meta.get("state")
-    if st:  # full saved frontend state (positions, cards/figures, groups, notes, annotations)
-        return {
-            "nodes": st.get("nodes", []),
-            "edges": st.get("edges", []),
-            "drawings": st.get("drawings", []),
-            "cards": st.get("cards", []),
-            "pdfAnn": st.get("pdfAnn", []),
-            "groups": st.get("groups", {}),
-            "figures": meta.get("figures", []),
-        }
-    return {
-        "nodes": [n.model_dump() for n in g.nodes],
-        "edges": [e.model_dump() for e in g.edges],
-        "figures": meta.get("figures", []),
-    }
+    base = {"figures": meta.get("figures", []), "visibility": meta.get("visibility", "private")}
+    if st:
+        base.update({"nodes": st.get("nodes", []), "edges": st.get("edges", []),
+                     "drawings": st.get("drawings", []), "cards": st.get("cards", []),
+                     "pdfAnn": st.get("pdfAnn", []), "groups": st.get("groups", {})})
+    else:
+        base.update({"nodes": [n.model_dump() for n in g.nodes],
+                     "edges": [e.model_dump() for e in g.edges]})
+    return base
 
 @app.get("/api/maps/{map_id}/export")
 async def export_map(map_id: str):

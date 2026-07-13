@@ -1,26 +1,34 @@
+"""Validator (v15) — confidence is already 0–1 (no /10 rescale). Dedup at 82%
+fuzzy, filter at 0.45, carry in_text/source_quote to nodes and evidence to edges."""
 import uuid, logging
 from rapidfuzz import fuzz
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from backend.app.models import GraphNode, GraphEdge, KnowledgeGraph
 
 logger = logging.getLogger(__name__)
 
-def validate(concepts, relations, doc_name, min_conf=3):
-    # Dedup concepts
+def _ctype(c):
+    ct = getattr(c, "concept_type", "term")
+    return getattr(ct, "value", str(ct))
+
+def validate(concepts, relations, doc_name, min_conf=0.45):
     canonical, label_map = [], {}
     for c in concepts:
         merged = False
         for e in canonical:
             if fuzz.token_sort_ratio(c.label.lower(), e.label.lower()) >= 82:
                 label_map[c.label] = e.label
-                if c.confidence > e.confidence: e.description = c.description; e.confidence = c.confidence
+                if c.confidence > e.confidence:
+                    e.description = c.description; e.confidence = c.confidence
+                    if getattr(c, "source_quote", ""): e.source_quote = c.source_quote
                 merged = True; break
-        if not merged: canonical.append(c); label_map[c.label] = c.label
+        if not merged:
+            canonical.append(c); label_map[c.label] = c.label
 
-    # Remap + filter
     concepts = [c for c in canonical if c.confidence >= min_conf]
     clabels = {c.label for c in concepts}
-    rels = []
-    seen = set()
+    rels = []; seen = set()
     for r in relations:
         src = label_map.get(r.source_label, r.source_label)
         tgt = label_map.get(r.target_label, r.target_label)
@@ -30,20 +38,21 @@ def validate(concepts, relations, doc_name, min_conf=3):
         if key in seen: continue
         seen.add(key); r.source_label = src; r.target_label = tgt; rels.append(r)
 
-    # Build graph
-    lid = {}
-    nodes = []
+    lid = {}; nodes = []
     for c in concepts:
         nid = str(uuid.uuid4())[:12]; lid[c.label] = nid
         nodes.append(GraphNode(id=nid, label=c.label, description=c.description,
-            concept_type=c.concept_type, abstraction_level=c.abstraction_level,
-            confidence=c.confidence/10.0))
+            concept_type=_ctype(c), abstraction_level=c.abstraction_level,
+            confidence=c.confidence,
+            source_quote=getattr(c, "source_quote", ""),
+            in_text=getattr(c, "in_text", True)))
     edges = []
     for r in rels:
         sid, tid = lid.get(r.source_label), lid.get(r.target_label)
         if sid and tid:
             edges.append(GraphEdge(id=str(uuid.uuid4())[:12], source_id=sid, target_id=tid,
-                relation_type=r.relation_type, justification=r.justification, confidence=r.confidence/10.0))
+                relation_type=r.relation_type, justification=r.justification,
+                confidence=r.confidence, evidence=getattr(r, "evidence", "")))
 
     logger.info(f"Graph: {len(nodes)} nodes, {len(edges)} edges")
     return KnowledgeGraph(document_name=doc_name, nodes=nodes, edges=edges,
