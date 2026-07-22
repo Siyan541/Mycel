@@ -102,6 +102,42 @@ function separateOverlaps(nodes, density, iters) {
 
 /* ── Organic layout: natural shape via light edge springs, but rectangle-based
    collision sized to the displayed definition height so text never overlaps. ── */
+function codeLayout(nodes, edges){
+  var byId={}; nodes.forEach(function(n){byId[n.id]=n;});
+  var kids={}, parent={};
+  (edges||[]).forEach(function(e){
+    var rt=e.relation_type; if(rt&&rt.value)rt=rt.value;
+    if(rt==='CONTAINS'&&byId[e.source]&&byId[e.target]&&parent[e.target]==null){
+      (kids[e.source]=kids[e.source]||[]).push(e.target); parent[e.target]=e.source;
+    }
+  });
+  var GAP=30, Y=160, wmemo={};
+  function subW(id, guard){
+    if(wmemo[id]!=null) return wmemo[id];
+    guard=guard||{}; if(guard[id]) return (byId[id]&&byId[id].w)||160; guard[id]=1;
+    var n=byId[id], w=(n&&n.w)||160, ch=kids[id]||[];
+    if(!ch.length){ wmemo[id]=w; return w; }
+    var cw=0; ch.forEach(function(c,i){ cw+=subW(c,guard)+(i?GAP:0); });
+    var r=Math.max(w,cw); wmemo[id]=r; return r;
+  }
+  var pos={};
+  function place(id,left,depth,guard){
+    guard=guard||{}; if(guard[id])return; guard[id]=1;
+    var n=byId[id], w=(n&&n.w)||160, ch=kids[id]||[], sw=subW(id);
+    if(!ch.length){ pos[id]={x:left+w/2,y:depth*Y}; return; }
+    var total=0; ch.forEach(function(c,i){ total+=subW(c)+(i?GAP:0); });
+    var cx=left+(sw-total)/2, centers=[];
+    ch.forEach(function(c){ var cw2=subW(c); place(c,cx,depth+1,guard); centers.push(cx+cw2/2); cx+=cw2+GAP; });
+    pos[id]={x:(centers[0]+centers[centers.length-1])/2, y:depth*Y};
+  }
+  var roots=[]; nodes.forEach(function(n){ if(parent[n.id]==null) roots.push(n.id); });
+  roots.sort(function(a,b){ return ((byId[b].concept_type==='module')?1:0)-((byId[a].concept_type==='module')?1:0); });
+  var cursor=0;
+  roots.forEach(function(rid){ var sw=subW(rid); place(rid,cursor,0,{}); cursor+=sw+80; });
+  nodes.forEach(function(n){ if(!pos[n.id]){ pos[n.id]={x:cursor,y:0}; cursor+=((n.w)||160)+GAP; } });
+  return nodes.map(function(n){ return Object.assign({},n,{x:pos[n.id].x,y:pos[n.id].y}); });
+}
+
 function organizedLayout(nodes, edges, density) {
   if (!nodes || nodes.length < 2) return (nodes || []).map(function(n) { return Object.assign({}, n, { x: n.x || 0, y: n.y || 0 }); });
   density = density || 'brief';
@@ -574,7 +610,7 @@ export default function App(){
     uploadPDF(file,{textOnly:textOnly,mode:(pendingMode==='code'?'code':'concept')}).then(function(r){
       if(r.nodes){
         var edgesN=r.edges.map(function(e){return Object.assign({},e,{source:e.source_id||e.source,target:e.target_id||e.target});});
-        var laid=organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');var mcards=(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r));dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}});
+        var laid=(r.nodes.some(function(_n){return _n.concept_type==='module';})?codeLayout(organicLayout(r.nodes,edgesN),edgesN):organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief'));var mcards=(r.cards||[]).concat(textOnly?[]:extractMediaCards(laid,r));dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}});
         setMapId(r.map_id);setMapVis('private');setView('graph');setColl(new Set());setTimeout(function(){fit(laid);},80);
         if(r.map_id)saveMapGraph(r.map_id,{nodes:laid,edges:edgesN,drawings:[],cards:mcards,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:{}}).catch(function(){});
         setProg({stage:'done',progress:1,message:r.node_count+' concepts, '+r.edge_count+' relations'});
@@ -593,7 +629,7 @@ export default function App(){
       dispatch({type:'INIT',data:{nodes:backup.nodes,edges:backup.edges||edgesN,drawings:backup.drawings||[],cards:backup.cards||[],pdfAnn:backup.pdfAnn||[],groups:backup.groups||{}}});
       setMapId(id);setMapVis((r&&r.visibility)||'private');setView('graph');setColl(new Set());setTimeout(function(){fit(backup.nodes);},80);return;
     }
-    var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief');
+    var laid=hasPos?r.nodes.map(function(n){var m=Object.assign({},n);if(m.w==null)Object.assign(m,nSize(m));return m;}):(r.nodes.some(function(_n){return _n.concept_type==='module';})?codeLayout(organicLayout(r.nodes,edgesN),edgesN):organizedLayout(organicLayout(r.nodes,edgesN),edgesN,'brief'));
     var savedCards=(r.cards||[]);
     var cards2=savedCards.length?savedCards:(textOnly?[]:extractMediaCards(laid,r));
     dispatch({type:'INIT',data:{nodes:laid,edges:edgesN,drawings:(r.drawings||[]),cards:cards2,pdfAnn:(r.pdfAnn||r.pdf_ann||[]),groups:(r.groups||{})}});

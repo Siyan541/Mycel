@@ -129,8 +129,9 @@ export var PALETTES = {
   },
 };
 
-var EC={logical:["IMPLIES","REQUIRES","CONTRADICTS","EQUIVALENT","GENERALIZES","SPECIALIZES"],compositional:["PART_OF","CONTAINS","INSTANCE_OF","DEFINED_BY"],pedagogical:["PREREQUISITE_FOR","ILLUSTRATES","EXTENDS","CONTRASTS_WITH"],causal:["CAUSES","ENABLES","CONSTRAINS","ANALOGOUS_TO"]};
+var EC={logical:["IMPLIES","REQUIRES","CONTRADICTS","EQUIVALENT","GENERALIZES","SPECIALIZES","CALLS","INSTANTIATES","INHERITS"],compositional:["PART_OF","CONTAINS","INSTANCE_OF","DEFINED_BY","DEFINES","IMPORTS"],pedagogical:["PREREQUISITE_FOR","ILLUSTRATES","EXTENDS","CONTRASTS_WITH"],causal:["CAUSES","ENABLES","CONSTRAINS","ANALOGOUS_TO","HAS_TYPE","RETURNS","READS","WRITES"]};
 export var ARROW_CATS=new Set(["logical","causal"]);
 export function edgeCat(t){for(var c in EC)if(EC[c].indexOf(t)>=0)return c;return"custom";}
-export function typeColor(P,t){return P.types[t]||P.types.term;}
+var CODE_COLORS={module:"#4C78C9",class:"#B07CC6",function:"#3F9E68",method:"#3F9E68",parameter:"#C9A227",constant:"#D9730D",variable:"#E08A50",type:"#4FA6A6",interface:"#4FA6A6",test:"#8A8F98",decorator:"#C77DA5"};
+export function typeColor(P,t){if(CODE_COLORS[t]){var c=CODE_COLORS[t];return{a:c,s:c,b:c+"22"};}return P.types[t]||P.types.term;}
 export function importanceFontSize(d,c,md){var raw=(d/Math.max(md,1))*0.6+c*0.4;return Math.round(11+raw*11);}

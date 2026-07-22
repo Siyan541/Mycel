@@ -213,7 +213,7 @@ def update_map_state(map_id, state):
     meta = dict(getattr(g, "metadata", None) or {})
     meta["state"] = state
     g.metadata = meta
-    conn = sqlite3.connect(DATA_DIR)
+    conn = sqlite3.connect(str(DATA_DIR / "app.db"))
     conn.execute(
         "UPDATE maps SET graph_json=?, updated_at=? WHERE id=?",
         (g.model_dump_json(), int(time.time()), map_id),
