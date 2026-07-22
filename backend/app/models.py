@@ -8,6 +8,18 @@ class ConceptType(str, Enum):
     argument="argument"; term="term"; framework="framework"
     phenomenon="phenomenon"
 
+
+class CodeEntityType(str, Enum):
+    MODULE="module"; CLASS="class"; FUNCTION="function"; TYPE="type"
+    VARIABLE="variable"; PARAMETER="parameter"; CONSTANT="constant"
+    INTERFACE="interface"; TEST="test"; DECORATOR="decorator"
+
+class CodeRelationType(str, Enum):
+    CALLS="CALLS"; INSTANTIATES="INSTANTIATES"; RETURNS="RETURNS"; THROWS="THROWS"; OVERRIDES="OVERRIDES"
+    READS="READS"; WRITES="WRITES"; PASSES_TO="PASSES_TO"; DEPENDS_ON="DEPENDS_ON"
+    DEFINES="DEFINES"; CONTAINS="CONTAINS"; IMPORTS="IMPORTS"; EXPORTS="EXPORTS"
+    HAS_TYPE="HAS_TYPE"; IMPLEMENTS="IMPLEMENTS"; INHERITS="INHERITS"; CONSTRAINS="CONSTRAINS"; INSTANCE_OF="INSTANCE_OF"
+
 class RelationType(str, Enum):
     IMPLIES="IMPLIES"; REQUIRES="REQUIRES"; DEFINED_BY="DEFINED_BY"
     CONTAINS="CONTAINS"; PART_OF="PART_OF"; CAUSES="CAUSES"
@@ -52,6 +64,7 @@ class RelationResult(BaseModel):
     relations: list[Relation]
 
 class GraphNode(BaseModel):
+    signature: str = ""; language: str = ""; file_path: str = ""; line: int = 0; kind_detail: str = ""
     id: str; label: str; description: str
     concept_type: str = "term"
     abstraction_level: int = 1
@@ -65,7 +78,7 @@ class GraphNode(BaseModel):
 
 class GraphEdge(BaseModel):
     id: str; source_id: str; target_id: str
-    relation_type: RelationType
+    relation_type: RelationType | CodeRelationType
     justification: str = ""
     confidence: float                    # 0–1
     page: int = 0                        # media.attach_relation_provenance
