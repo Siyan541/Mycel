@@ -436,6 +436,7 @@ export default function PDFViewer(props) {
     if (!selectedId) return [];
     var node = null; for (var i = 0; i < nodes.length; i++) { if (nodes[i].id === selectedId) { node = nodes[i]; break; } }
     if (!node) return [];
+    if (node.mentions && node.mentions.length) { var outM = []; node.mentions.forEach(function(m) { var pg = m.page, pt = pageText[pg], fy = 0; if (pt) { pageConcat(pt); var pb = normWS(m.quote || '').slice(0, 40); var ix = pb ? pt._concat.indexOf(pb) : -1; if (ix >= 0) { var it0 = pt.items[pt._map[ix]]; if (it0) fy = it0.fy; } } outM.push({ page: pg, fy: fy, score: (typeof m.score === 'number' ? m.score : null), quote: m.quote || '' }); }); if (outM.length) return outM; }
     var label = normWS(node.label);
     var toks = sigTokens(node.label).filter(function(t) { return !COMMON[t]; });
     var probe = (label.length >= 3) ? label : (toks[0] || '');
@@ -469,7 +470,7 @@ export default function PDFViewer(props) {
           h('span', { style: { fontSize: 12, color: DIM, whiteSpace: 'nowrap' } }, pdfDoc ? (currentPage + ' / ' + pdfDoc.numPages) : '…'),
           (selectedId && occurrences.length > 1) ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 2, marginLeft: 4 } },
             h('button', { title: 'Previous mention', onClick: function() { gotoOcc(occIdx - 1); }, style: { padding: '2px 6px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: DIM, cursor: 'pointer', fontSize: 12 } }, '‹'),
-            h('span', { style: { fontSize: 11, color: DIM, minWidth: 42, textAlign: 'center' } }, 'ref ' + (occIdx + 1) + '/' + occurrences.length),
+            h('span', { style: { fontSize: 11, color: DIM, minWidth: 42, textAlign: 'center' } }, 'ref ' + (occIdx + 1) + '/' + occurrences.length + ((occurrences[occIdx] && typeof occurrences[occIdx].score === 'number') ? ' · ' + Math.round(occurrences[occIdx].score * 100) + '%' : '')),
             h('button', { title: 'Next mention', onClick: function() { gotoOcc(occIdx + 1); }, style: { padding: '2px 6px', background: 'transparent', border: '1px solid ' + BRD, borderRadius: 6, color: DIM, cursor: 'pointer', fontSize: 12 } }, '›')) : null
         ),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
@@ -611,6 +612,12 @@ export default function PDFViewer(props) {
                 h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
                   h('div', { style: { width: 8, height: 8, borderRadius: '50%', background: typeColor, flexShrink: 0 } }),
                   h('div', { style: { fontSize: 14, fontWeight: 600, color: typeColor } }, n.label),
+                  (typeof n.source_score === 'number' && n.source_score > 0)
+                    ? h('span', { title: 'Source-match strength ' + Math.round(n.source_score * 100) + '%', style: { fontSize: 9, fontWeight: 700, color: (n.source_score >= 0.6 ? '#2FBF71' : (n.source_score >= 0.45 ? '#E0A44A' : '#C46B6B')), border: '1px solid ' + (n.source_score >= 0.6 ? '#2FBF71' : (n.source_score >= 0.45 ? '#E0A44A' : '#C46B6B')) + '66', borderRadius: 6, padding: '1px 5px' } }, Math.round(n.source_score * 100) + '%')
+                    : null,
+                  (n.in_text === false)
+                    ? h('span', { title: 'Not defined in this text - a prerequisite or inferred concept', style: { fontSize: 9, fontWeight: 700, color: DIM, border: '1px dashed ' + BRD, borderRadius: 6, padding: '1px 5px' } }, 'assumed')
+                    : null,
                   h('span', { style: { fontSize: 10, color: DIM, marginLeft: 'auto', textTransform: 'uppercase' } }, n.concept_type)
                 ),
                 // Description
