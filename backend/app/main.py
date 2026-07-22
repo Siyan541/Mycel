@@ -20,7 +20,7 @@ async def lifespan(app): yield
 app = FastAPI(title="Mycel", version="3.1.0", lifespan=lifespan)
 app.include_router(socratic_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-ALLOWED_EXT = {'.pdf','.docx','.txt','.md','.markdown','.rst','.tex','.epub'}
+ALLOWED_EXT = {'.pdf','.docx','.txt','.md','.markdown','.rst','.tex','.epub', '.py'}
 def _uid(h): return h or "anonymous"
 
 @app.get("/")
@@ -71,13 +71,18 @@ async def leaderboard(): return {"users": get_leaderboard()}
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), force: bool = Query(False),
                  text_only: bool = Query(False), mode: str = Query("concept")):
-    if not file.filename.lower().endswith(".pdf"):
-        return JSONResponse({"error": "PDF only"}, 400)
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in (".pdf", ".docx", ".txt", ".md", ".markdown", ".rst", ".tex", ".epub", ".py"):
+        return JSONResponse({"error": "Unsupported format: " + ext}, 400)
     fp = UPLOAD_DIR / file.filename
     with open(fp, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    graph = run(str(fp), mode=mode)
+    if ext == ".py":
+        from backend.app.pipeline.code_parser import build_code_graph
+        graph = build_code_graph(str(fp))
+    else:
+        graph = run(str(fp))
 
     # (a) make the PDF split-view scroll + highlight work: exact page + verbatim quote
     try:
