@@ -84,6 +84,11 @@ async def upload(file: UploadFile = File(...), force: bool = Query(False),
     else:
         graph = run(str(fp))
         try:
+            from backend.app.pipeline.refine import refine
+            refine(graph)
+        except Exception:
+            pass
+        try:
             from backend.app.services.kb import ground
             ground(graph)
         except Exception:

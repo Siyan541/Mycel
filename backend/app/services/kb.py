@@ -89,6 +89,7 @@ def link_concepts(nodes, min_score=0.55):
             if float(sc)>=min_score:
                 cid,label,desc,domain=meta[int(bi)]
                 _set(n,"canonical_id",cid); _set(n,"link_score",round(float(sc),3))
+                if domain: _set(n,"cluster",domain)
         if os.environ.get("KB_WIKIDATA","")=="1":
             import numpy as np, json as _json
             for n in targets:
