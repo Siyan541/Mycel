@@ -83,6 +83,11 @@ async def upload(file: UploadFile = File(...), force: bool = Query(False),
         graph = build_code_graph(str(fp))
     else:
         graph = run(str(fp))
+        try:
+            from backend.app.services.kb import ground
+            ground(graph)
+        except Exception:
+            pass
 
     # (a) make the PDF split-view scroll + highlight work: exact page + verbatim quote
     try:

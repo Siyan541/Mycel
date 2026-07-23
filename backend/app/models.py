@@ -64,6 +64,8 @@ class RelationResult(BaseModel):
     relations: list[Relation]
 
 class GraphNode(BaseModel):
+    canonical_id: str = ""       # KB grounding (Stage 2)
+    link_score: float = 0.0      # 0-1 similarity to the canonical entry
     signature: str = ""; language: str = ""; file_path: str = ""; line: int = 0; kind_detail: str = ""
     id: str; label: str; description: str
     concept_type: str = "term"
